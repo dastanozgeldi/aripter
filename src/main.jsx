@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { ConvexProvider, ConvexReactClient, useQuery } from "convex/react";
 import { createRoot } from "react-dom/client";
+import { api } from "../convex/_generated/api";
 import "./styles.css";
+
+const convexUrl = import.meta.env.VITE_CONVEX_URL;
+const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
 const LANGUAGE_OPTIONS = {
   Russian: {
@@ -533,8 +538,24 @@ function App() {
   );
 }
 
+function BackendConnectionProbe() {
+  useQuery(api.status.health);
+  return null;
+}
+
+function Root() {
+  if (!convex) return <App />;
+
+  return (
+    <ConvexProvider client={convex}>
+      <BackendConnectionProbe />
+      <App />
+    </ConvexProvider>
+  );
+}
+
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <Root />
   </React.StrictMode>,
 );

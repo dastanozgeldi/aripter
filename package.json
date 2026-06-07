@@ -5,14 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "convex dev",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy:backend": "convex deploy"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.4.1",
-    "vite": "^6.3.5",
+    "convex": "^1.40.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
-  },
-  "devDependencies": {}
+    "react-dom": "^19.1.0",
+    "vite": "^6.3.5"
+  }
 }
