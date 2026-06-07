@@ -14,6 +14,10 @@ export default defineSchema({
     categories: v.array(v.string()),
     durationSeconds: v.number(),
     hostToken: v.string(),
+    roundNumber: v.optional(v.number()),
+    letter: v.optional(v.string()),
+    roundEndsAt: v.optional(v.number()),
+    revealIndex: v.optional(v.number()),
   }).index("by_code", ["code"]),
 
   players: defineTable({
@@ -22,7 +26,21 @@ export default defineSchema({
     name: v.string(),
     isHost: v.boolean(),
     ready: v.boolean(),
+    points: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_and_token", ["roomId", "token"]),
+
+  answers: defineTable({
+    roomId: v.id("rooms"),
+    roundNumber: v.number(),
+    playerId: v.id("players"),
+    categoryIndex: v.number(),
+    value: v.string(),
+  }).index("by_room_round_player_category", [
+    "roomId",
+    "roundNumber",
+    "playerId",
+    "categoryIndex",
+  ]),
 });

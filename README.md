@@ -32,5 +32,12 @@ The Convex room entry flow is live:
 - each browser keeps a private guest token in local storage
 - invited players join by name
 - the lobby player list and ready states update in realtime
+- only the host can start after everyone is ready
+- Convex selects the letter and owns the shared round deadline
+- answers save privately during play and lock at the deadline
+- locked answers are revealed to everyone one category at a time
+- the host advances the reveal and opens the results
+- non-empty answers score one word; every tied winner gets a point
+- cumulative points survive when the host opens another round
 
-Round start, answers, reveal, and scoring are the next backend slices.
+Word legitimacy checks remain intentionally outside the MVP.

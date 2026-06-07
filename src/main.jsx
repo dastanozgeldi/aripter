@@ -244,7 +244,15 @@ function JoinRoom({ room, onJoin, onLeave }) {
   );
 }
 
-function Lobby({ room, copied, onCopyLink, onSetReady }) {
+function Lobby({
+  room,
+  copied,
+  onCopyLink,
+  onSetReady,
+  onStartRound,
+  startError,
+  starting,
+}) {
   const readyCount = room.players.filter((player) => player.ready).length;
   const allReady = room.players.length > 1 && readyCount === room.players.length;
 
@@ -285,7 +293,10 @@ function Lobby({ room, copied, onCopyLink, onSetReady }) {
                   {player.name}
                   {isViewer ? " (you)" : ""}
                 </strong>
-                <span>{player.isHost ? "Host" : "Player"}</span>
+                <span>
+                  {player.isHost ? "Host" : "Player"} · {player.points}{" "}
+                  {player.points === 1 ? "pt" : "pts"}
+                </span>
               </div>
               {isViewer ? (
                 <button
@@ -305,16 +316,202 @@ function Lobby({ room, copied, onCopyLink, onSetReady }) {
       </div>
 
       {room.viewer.isHost && (
-        <button className="primary-button" disabled>
-          Start round
+        <button
+          className="primary-button"
+          disabled={!allReady || starting}
+          onClick={onStartRound}
+        >
+          {starting ? "Starting..." : "Start round"}
         </button>
       )}
 
+      {startError && <p className="error-message">{startError}</p>}
       <p className="microcopy">
         {allReady
-          ? "Everyone is ready. Shared round start and timer are the next slice."
+          ? room.viewer.isHost
+            ? "Everyone is ready. Start when you are."
+            : "Everyone is ready. Waiting for the host."
           : "This lobby updates live. Everyone marks themselves ready."}
       </p>
+    </div>
+  );
+}
+
+function useSecondsLeft(roundEndsAt) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return Math.max(0, Math.ceil((roundEndsAt - now) / 1000));
+}
+
+function PlayingRound({ room, onSaveAnswer }) {
+  const [answers, setAnswers] = useState(room.viewerAnswers);
+  const [saveError, setSaveError] = useState("");
+  const secondsLeft = useSecondsLeft(room.roundEndsAt);
+  const answerCount = answers.filter((answer) => answer.trim()).length;
+
+  useEffect(() => {
+    setAnswers(room.viewerAnswers);
+  }, [room.roundNumber]);
+
+  const updateAnswer = (categoryIndex, value) => {
+    setAnswers((current) =>
+      current.map((answer, index) => (index === categoryIndex ? value : answer)),
+    );
+    setSaveError("");
+    onSaveAnswer(categoryIndex, value).catch((error) => {
+      setSaveError(getErrorMessage(error));
+    });
+  };
+
+  return (
+    <div className="playing-content">
+      <div className="round-focus">
+        <span className="eyebrow">
+          Round {room.roundNumber} · {room.language}
+        </span>
+        <div className="letter-display">{room.letter}</div>
+        <span className={`timer ${secondsLeft <= 10 ? "urgent" : ""}`}>
+          {Math.floor(secondsLeft / 60)}:
+          {String(secondsLeft % 60).padStart(2, "0")}
+        </span>
+        <p>Every answer must begin with this letter.</p>
+      </div>
+
+      <div className="answer-sheet">
+        <div className="section-heading">
+          <span>Your answers</span>
+          <span>
+            {answerCount}/{room.categories.length}
+          </span>
+        </div>
+        {room.categories.map((category, index) => (
+          <label className="answer-row" key={`${room.roundNumber}-${index}`}>
+            <span className="answer-index">{index + 1}</span>
+            <span className="answer-category">{category}</span>
+            <input
+              autoFocus={index === 0}
+              disabled={secondsLeft === 0}
+              maxLength={120}
+              onChange={(event) => updateAnswer(index, event.target.value)}
+              placeholder={`${room.letter}…`}
+              value={answers[index] ?? ""}
+            />
+          </label>
+        ))}
+        {saveError && <p className="error-message">{saveError}</p>}
+        <p className="microcopy">
+          Answers save automatically. The server locks them when time expires.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function RevealRound({ room, advancing, error, onAdvance }) {
+  const isLastCategory =
+    room.reveal.categoryIndex === room.categories.length - 1;
+
+  return (
+    <div className="reveal-content">
+      <div className="reveal-progress">
+        {room.categories.map((category, index) => (
+          <span
+            className={index <= room.reveal.categoryIndex ? "seen" : ""}
+            key={category}
+          />
+        ))}
+      </div>
+      <span className="eyebrow">
+        Category {room.reveal.categoryIndex + 1} of {room.categories.length}
+      </span>
+      <h2>{room.reveal.category}</h2>
+      <div className="reveal-grid">
+        {room.reveal.answers.map((answer, index) => (
+          <article
+            className="answer-card"
+            key={answer.playerId}
+            style={{ "--delay": `${index * 90}ms` }}
+          >
+            <div className="avatar">{answer.name.slice(0, 1).toUpperCase()}</div>
+            <span>{answer.name}</span>
+            <strong>{answer.value.trim() || "No answer"}</strong>
+            <em>{answer.score ? "+1" : "0"}</em>
+          </article>
+        ))}
+      </div>
+      {room.viewer.isHost ? (
+        <button
+          className="primary-button"
+          disabled={advancing}
+          onClick={onAdvance}
+        >
+          {advancing
+            ? "Updating..."
+            : isLastCategory
+              ? "See results"
+              : "Next category"}
+        </button>
+      ) : (
+        <p className="microcopy">Waiting for the host to continue.</p>
+      )}
+      {error && <p className="error-message">{error}</p>}
+    </div>
+  );
+}
+
+function Results({ room, error, onReturnToLobby, returning }) {
+  const tied = room.results.winners.length > 1;
+  const winnerNames = room.results.winners
+    .map((winner) => winner.name)
+    .join(" & ");
+
+  return (
+    <div className="results-content">
+      <span className="eyebrow">Round {room.roundNumber} complete</span>
+      <h2>{tied ? "It’s a tie" : `${winnerNames} wins`}</h2>
+      <p>
+        {winnerNames} {tied ? "each get a round point." : "gets the round point."}
+      </p>
+      <div className="scoreboard">
+        {room.results.standings.map((standing, index) => (
+          <div
+            className={`score-row ${standing.isWinner ? "leader" : ""}`}
+            key={standing.playerId}
+          >
+            <span className="rank">{String(index + 1).padStart(2, "0")}</span>
+            <div className="avatar">
+              {standing.name.slice(0, 1).toUpperCase()}
+            </div>
+            <strong>{standing.name}</strong>
+            <span className="round-score">
+              {standing.roundScore}{" "}
+              {standing.roundScore === 1 ? "word" : "words"}
+            </span>
+            <span className="total-score">
+              {standing.points} {standing.points === 1 ? "pt" : "pts"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {room.viewer.isHost ? (
+        <button
+          className="primary-button"
+          disabled={returning}
+          onClick={onReturnToLobby}
+        >
+          {returning ? "Opening lobby..." : "Play another round"}
+        </button>
+      ) : (
+        <p className="microcopy">
+          Waiting for the host to open the next round.
+        </p>
+      )}
+      {error && <p className="error-message">{error}</p>}
     </div>
   );
 }
@@ -324,6 +521,18 @@ function LoadingRoom() {
     <div className="state-message">
       <span className="eyebrow">Opening room</span>
       <h2>Connecting...</h2>
+    </div>
+  );
+}
+
+function LockedRoom({ onLeave }) {
+  return (
+    <div className="state-message">
+      <span className="eyebrow">Round in progress</span>
+      <h2>Joining is locked for this round.</h2>
+      <button className="primary-button" onClick={onLeave}>
+        Create a room
+      </button>
     </div>
   );
 }
@@ -397,13 +606,30 @@ function RoomApp() {
   const playerToken = useMemo(getPlayerToken, []);
   const [roomCode, navigateToRoom] = useRoomNavigation();
   const [copied, setCopied] = useState(false);
+  const [startError, setStartError] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [revealError, setRevealError] = useState("");
+  const [advancingReveal, setAdvancingReveal] = useState(false);
+  const [returnError, setReturnError] = useState("");
+  const [returning, setReturning] = useState(false);
   const createRoom = useMutation(api.rooms.create);
   const joinRoom = useMutation(api.rooms.join);
   const setReady = useMutation(api.rooms.setReady);
+  const startRound = useMutation(api.rooms.startRound);
+  const saveAnswer = useMutation(api.rooms.saveAnswer);
+  const advanceReveal = useMutation(api.rooms.advanceReveal);
+  const returnToLobby = useMutation(api.rooms.returnToLobby);
   const room = useQuery(
     api.rooms.get,
     roomCode ? { code: roomCode, playerToken } : "skip",
   );
+
+  useEffect(() => {
+    if (!room) return;
+    setAdvancingReveal(false);
+    if (room.status !== "lobby") setStarting(false);
+    if (room.status === "lobby") setReturning(false);
+  }, [room?.status, room?.revealIndex]);
 
   const handleCreate = async (settings) => {
     const result = await createRoom({
@@ -425,6 +651,39 @@ function RoomApp() {
     await navigator.clipboard.writeText(window.location.href);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
+  };
+
+  const handleStartRound = async () => {
+    setStarting(true);
+    setStartError("");
+    try {
+      await startRound({ code: roomCode, hostToken: playerToken });
+    } catch (error) {
+      setStartError(getErrorMessage(error));
+      setStarting(false);
+    }
+  };
+
+  const handleAdvanceReveal = async () => {
+    setAdvancingReveal(true);
+    setRevealError("");
+    try {
+      await advanceReveal({ code: roomCode, hostToken: playerToken });
+    } catch (error) {
+      setRevealError(getErrorMessage(error));
+      setAdvancingReveal(false);
+    }
+  };
+
+  const handleReturnToLobby = async () => {
+    setReturning(true);
+    setReturnError("");
+    try {
+      await returnToLobby({ code: roomCode, hostToken: playerToken });
+    } catch (error) {
+      setReturnError(getErrorMessage(error));
+      setReturning(false);
+    }
   };
 
   if (!roomCode) {
@@ -452,6 +711,14 @@ function RoomApp() {
   }
 
   if (!room.viewer) {
+    if (room.status !== "lobby") {
+      return (
+        <GameShell stageNumber={room.status === "playing" ? 3 : 4}>
+          <LockedRoom onLeave={() => navigateToRoom("")} />
+        </GameShell>
+      );
+    }
+
     return (
       <GameShell stageNumber={2}>
         <JoinRoom
@@ -463,15 +730,62 @@ function RoomApp() {
     );
   }
 
+  if (room.status === "playing") {
+    return (
+      <GameShell stageNumber={3}>
+        <PlayingRound
+          onSaveAnswer={(categoryIndex, value) =>
+            saveAnswer({
+              code: room.code,
+              playerToken,
+              categoryIndex,
+              value,
+            })
+          }
+          room={room}
+        />
+      </GameShell>
+    );
+  }
+
+  if (room.status === "reveal") {
+    return (
+      <GameShell stageNumber={4}>
+        <RevealRound
+          advancing={advancingReveal}
+          error={revealError}
+          onAdvance={handleAdvanceReveal}
+          room={room}
+        />
+      </GameShell>
+    );
+  }
+
+  if (room.status === "results") {
+    return (
+      <GameShell stageNumber={5}>
+        <Results
+          error={returnError}
+          onReturnToLobby={handleReturnToLobby}
+          returning={returning}
+          room={room}
+        />
+      </GameShell>
+    );
+  }
+
   return (
     <GameShell stageNumber={2}>
       <Lobby
         copied={copied}
         onCopyLink={handleCopyLink}
+        onStartRound={handleStartRound}
         onSetReady={(ready) =>
           setReady({ code: room.code, playerToken, ready })
         }
         room={room}
+        startError={startError}
+        starting={starting}
       />
     </GameShell>
   );
