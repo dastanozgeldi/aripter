@@ -637,6 +637,87 @@ function MissingRoom({ onLeave }) {
   );
 }
 
+function HowToPlay({ onClose }) {
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="how-to-play-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <section
+        aria-labelledby="how-to-play-title"
+        aria-modal="true"
+        className="how-to-play-panel"
+        role="dialog"
+      >
+        <div className="how-to-play-heading">
+          <div>
+            <span className="eyebrow">The rules</span>
+            <h2 id="how-to-play-title">How to play Wordlord</h2>
+          </div>
+          <button
+            aria-label="Close how to play"
+            className="how-to-play-close"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </div>
+
+        <p className="how-to-play-intro">
+          Think fast, defend your answers, and let the room decide what counts.
+        </p>
+
+        <ol className="how-to-play-steps">
+          <li>
+            <span>01</span>
+            <div>
+              <strong>Make the room</strong>
+              <p>The host picks the language, categories, and round time.</p>
+            </div>
+          </li>
+          <li>
+            <span>02</span>
+            <div>
+              <strong>Race the clock</strong>
+              <p>Fill each category with an answer beginning with the letter.</p>
+            </div>
+          </li>
+          <li>
+            <span>03</span>
+            <div>
+              <strong>Judge the words</strong>
+              <p>Approve or reject other players’ answers during the reveal.</p>
+            </div>
+          </li>
+          <li>
+            <span>04</span>
+            <div>
+              <strong>Claim the round</strong>
+              <p>Only majority-approved answers score. Most valid words win.</p>
+            </div>
+          </li>
+        </ol>
+
+        <div className="how-to-play-note">
+          <strong>Majority rules</strong>
+          <span>Your own answer starts with your approval.</span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function GameShell({
   stageNumber,
   children,
@@ -644,25 +725,35 @@ function GameShell({
   onLeaveRoom,
   showIntro = false,
 }) {
+  const [showHowToPlay, setShowHowToPlay] = useState(false);
+
   return (
     <main className="game-app">
       <header className="party-header">
-        <a className="brand" href="/">
-          WORDLORD<span>beta</span>
-        </a>
+        <a className="brand" href="/">WORDLORD</a>
         <div className="round-pill">One letter · Loads of words</div>
-        {onLeaveRoom ? (
+        <div className="header-actions">
           <button
-            className="header-link"
-            disabled={leaving}
-            onClick={onLeaveRoom}
+            className="header-link how-to-play-trigger"
+            onClick={() => setShowHowToPlay(true)}
           >
-            {leaving ? "Leaving..." : "Leave room"}
+            How to play
           </button>
-        ) : (
-          <button className="header-link">How to play</button>
-        )}
+          {onLeaveRoom && (
+            <button
+              className="header-link leave-room-link"
+              disabled={leaving}
+              onClick={onLeaveRoom}
+            >
+              {leaving ? "Leaving..." : "Leave room"}
+            </button>
+          )}
+        </div>
       </header>
+
+      {showHowToPlay && (
+        <HowToPlay onClose={() => setShowHowToPlay(false)} />
+      )}
 
       <div className="party-shell">
         <aside className="stage-rail" aria-label="Game progress">
