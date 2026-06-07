@@ -49,4 +49,19 @@ export default defineSchema({
     "playerId",
     "categoryIndex",
   ]),
+
+  votes: defineTable({
+    roomId: v.id("rooms"),
+    roundNumber: v.number(),
+    categoryIndex: v.number(),
+    answerPlayerId: v.id("players"),
+    voterPlayerId: v.id("players"),
+    approved: v.boolean(),
+  }).index("by_room_round_category_answer_voter", [
+    "roomId",
+    "roundNumber",
+    "categoryIndex",
+    "answerPlayerId",
+    "voterPlayerId",
+  ]),
 });

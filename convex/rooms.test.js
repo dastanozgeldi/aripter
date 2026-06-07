@@ -725,21 +725,239 @@ test("locked answers are revealed one shared category at a time", async () => {
   expect(room?.reveal).toEqual({
     categoryIndex: 0,
     category: "Movie",
+    votingComplete: false,
     answers: [
       {
         playerId: room?.players[0].id,
         name: "Dastan",
         value: "The Matrix",
-        score: 1,
+        score: 0,
+        approvals: 1,
+        rejections: 0,
+        requiredApprovals: 2,
+        approved: false,
+        viewerVote: null,
+        votingComplete: false,
       },
       {
         playerId: room?.players[1].id,
         name: "Masha",
         value: "Titanic",
-        score: 1,
+        score: 0,
+        approvals: 1,
+        rejections: 0,
+        requiredApprovals: 2,
+        approved: false,
+        viewerVote: true,
+        votingComplete: false,
       },
     ],
   });
+});
+
+test("a peer approval gives an answer a strict majority", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 0 });
+  });
+
+  const beforeVote = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  expect(beforeVote?.reveal?.answers[0]).toMatchObject({
+    name: "Dastan",
+    approvals: 1,
+    requiredApprovals: 2,
+    approved: false,
+    viewerVote: null,
+  });
+
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId: beforeVote.reveal.answers[0].playerId,
+    approved: true,
+  });
+
+  const afterVote = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  expect(afterVote?.reveal?.answers[0]).toMatchObject({
+    approvals: 2,
+    requiredApprovals: 2,
+    approved: true,
+    viewerVote: true,
+  });
+});
+
+test("a strict majority approves an answer without unanimity", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "third-browser-token",
+    playerName: "Alex",
+  });
+  for (const playerToken of [
+    "host-browser-token",
+    "friend-browser-token",
+    "third-browser-token",
+  ]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 0 });
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  const answerPlayerId = room.reveal.answers[0].playerId;
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId,
+    approved: true,
+  });
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "third-browser-token",
+    answerPlayerId,
+    approved: false,
+  });
+
+  const votedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "third-browser-token",
+  });
+  expect(votedRoom?.reveal?.answers[0]).toMatchObject({
+    approvals: 2,
+    rejections: 1,
+    requiredApprovals: 2,
+    approved: true,
+    votingComplete: true,
+  });
+});
+
+test("the host cannot advance while connected peer votes are missing", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 0 });
+  });
+
+  await expect(
+    t.mutation(api.rooms.advanceReveal, {
+      code,
+      hostToken: "host-browser-token",
+    }),
+  ).rejects.toThrow("Waiting for every connected player to vote.");
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId: room.reveal.answers[0].playerId,
+    approved: false,
+  });
+  await t.mutation(api.rooms.advanceReveal, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  const advancedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(advancedRoom?.reveal?.categoryIndex).toBe(1);
 });
 
 test("only the host advances the shared reveal category", async () => {
@@ -790,7 +1008,7 @@ test("only the host advances the shared reveal category", async () => {
   });
 });
 
-test("finishing the reveal scores non-empty answers and awards all tied winners", async () => {
+test("finishing the reveal awards all players tied on approved answers", async () => {
   const t = convexTest(schema, modules);
   const { code } = await t.mutation(api.rooms.create, {
     hostToken: "host-browser-token",
@@ -814,8 +1032,8 @@ test("finishing the reveal scores non-empty answers and awards all tied winners"
   await t.mutation(api.rooms.saveAnswer, {
     code,
     playerToken: "host-browser-token",
-    categoryIndex: 0,
-    value: "The Matrix",
+    categoryIndex: 1,
+    value: "Thriller",
   });
   await t.mutation(api.rooms.saveAnswer, {
     code,
@@ -829,6 +1047,28 @@ test("finishing the reveal scores non-empty answers and awards all tied winners"
       .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
       .unique();
     await ctx.db.patch(room._id, { status: "reveal", revealIndex: 1 });
+  });
+  const revealRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  const dastan = revealRoom.reveal.answers.find(
+    (answer) => answer.name === "Dastan",
+  );
+  const masha = revealRoom.reveal.answers.find(
+    (answer) => answer.name === "Masha",
+  );
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId: dastan.playerId,
+    approved: true,
+  });
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    answerPlayerId: masha.playerId,
+    approved: true,
   });
 
   await t.mutation(api.rooms.advanceReveal, {
@@ -862,6 +1102,156 @@ test("finishing the reveal scores non-empty answers and awards all tied winners"
         points: 1,
         isWinner: true,
       },
+    ],
+  });
+});
+
+test("only majority-approved answers count toward the round score", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 1,
+    value: "Thriller",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    categoryIndex: 1,
+    value: "idk",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 1 });
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  const dastan = room.reveal.answers.find((answer) => answer.name === "Dastan");
+  const masha = room.reveal.answers.find((answer) => answer.name === "Masha");
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId: dastan.playerId,
+    approved: true,
+  });
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    answerPlayerId: masha.playerId,
+    approved: false,
+  });
+  await t.mutation(api.rooms.advanceReveal, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  const resultsRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(resultsRoom?.results).toMatchObject({
+    winners: [{ name: "Dastan" }],
+    standings: [
+      { name: "Dastan", roundScore: 1, points: 1, isWinner: true },
+      { name: "Masha", roundScore: 0, points: 0, isWinner: false },
+    ],
+  });
+});
+
+test("a round with no approved answers awards no winner or points", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.saveAnswer, {
+      code,
+      playerToken,
+      categoryIndex: 1,
+      value: "idk",
+    });
+  }
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 1 });
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  const dastan = room.reveal.answers.find((answer) => answer.name === "Dastan");
+  const masha = room.reveal.answers.find((answer) => answer.name === "Masha");
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    answerPlayerId: dastan.playerId,
+    approved: false,
+  });
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    answerPlayerId: masha.playerId,
+    approved: false,
+  });
+  await t.mutation(api.rooms.advanceReveal, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  const resultsRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(resultsRoom?.results).toMatchObject({
+    winners: [],
+    standings: [
+      { name: "Dastan", roundScore: 0, points: 0, isWinner: false },
+      { name: "Masha", roundScore: 0, points: 0, isWinner: false },
     ],
   });
 });

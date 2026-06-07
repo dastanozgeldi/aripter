@@ -398,7 +398,7 @@ a {
 
 .answer-card {
   display: grid;
-  min-height: 155px;
+  min-height: 210px;
   padding: 16px;
   align-content: start;
   justify-items: start;
@@ -408,6 +408,16 @@ a {
   text-align: left;
   animation: pop-in 350ms both;
   animation-delay: var(--delay);
+}
+
+.answer-card.is-approved {
+  border-color: rgba(87, 118, 0, 0.32);
+  background: rgba(221, 255, 86, 0.35);
+}
+
+.answer-card.is-rejected {
+  border-color: rgba(198, 49, 32, 0.25);
+  background: rgba(255, 108, 82, 0.1);
 }
 
 .answer-card .avatar {
@@ -428,7 +438,7 @@ a {
   line-height: 1.2;
 }
 
-.answer-card em {
+.answer-card .vote-summary {
   margin-top: auto;
   padding-top: 15px;
   color: #684bf5;
@@ -436,6 +446,44 @@ a {
   font-size: 12px;
   font-style: normal;
   font-weight: 700;
+}
+
+.answer-card.is-rejected .vote-summary {
+  color: #c63120;
+}
+
+.own-vote {
+  margin-top: 9px;
+  font-size: 10px;
+}
+
+.vote-actions {
+  display: grid;
+  width: 100%;
+  margin-top: 10px;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.vote-actions button {
+  padding: 8px;
+  border: 1px solid rgba(24, 24, 24, 0.17);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.65);
+  color: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.vote-actions button.active.approve {
+  border-color: #181818;
+  background: #ddff56;
+}
+
+.vote-actions button.active.reject {
+  border-color: #c63120;
+  background: #ffddda;
+  color: #9e2114;
 }
 
 @keyframes pop-in {

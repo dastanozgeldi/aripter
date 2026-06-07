@@ -66,8 +66,15 @@ async function deleteRoomData(ctx, roomId) {
     .query("players")
     .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", roomId))
     .collect();
+  const votes = await ctx.db
+    .query("votes")
+    .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+      queryBuilder.eq("roomId", roomId),
+    )
+    .collect();
 
   for (const answer of answers) await ctx.db.delete(answer._id);
+  for (const vote of votes) await ctx.db.delete(vote._id);
   for (const player of players) await ctx.db.delete(player._id);
   await ctx.db.delete(roomId);
 }
@@ -77,6 +84,38 @@ function getRoundPlayers(players, roundNumber) {
     (player) => player.activeRoundNumber === roundNumber,
   );
   return participants.length > 0 ? participants : players;
+}
+
+function isAnswerVotingComplete(players, answer, votes) {
+  const connectedPlayers = players.filter((player) => player.online !== false);
+  return connectedPlayers
+    .filter((player) => player._id !== answer.playerId)
+    .every((player) =>
+      votes.some(
+        (vote) =>
+          vote.answerPlayerId === answer.playerId &&
+          vote.voterPlayerId === player._id,
+      ),
+    );
+}
+
+function isVotingComplete(players, answers, votes) {
+  return answers
+    .filter((answer) => answer.value.trim())
+    .every((answer) => isAnswerVotingComplete(players, answer, votes));
+}
+
+function isAnswerApproved(answer, votes, playerCount) {
+  if (!answer.value.trim()) return false;
+  const approvals =
+    1 +
+    votes.filter(
+      (vote) =>
+        vote.answerPlayerId === answer.playerId &&
+        vote.categoryIndex === answer.categoryIndex &&
+        vote.approved,
+    ).length;
+  return approvals >= Math.floor(playerCount / 2) + 1;
 }
 
 export const create = mutation({
@@ -290,8 +329,22 @@ export const leave = mutation({
         queryBuilder.eq("roomId", room._id),
       )
       .collect();
+    const votes = await ctx.db
+      .query("votes")
+      .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id),
+      )
+      .collect();
     for (const answer of answers) {
       if (answer.playerId === player._id) await ctx.db.delete(answer._id);
+    }
+    for (const vote of votes) {
+      if (
+        vote.answerPlayerId === player._id ||
+        vote.voterPlayerId === player._id
+      ) {
+        await ctx.db.delete(vote._id);
+      }
     }
     await ctx.db.delete(player._id);
 
@@ -528,20 +581,51 @@ export const advanceReveal = mutation({
     }
 
     const revealIndex = room.revealIndex ?? 0;
+    const storedPlayers = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    const roundPlayers = getRoundPlayers(
+      storedPlayers,
+      room.roundNumber ?? 0,
+    );
+    const roundAnswers = await ctx.db
+      .query("answers")
+      .withIndex("by_room_round_player_category", (queryBuilder) =>
+        queryBuilder
+          .eq("roomId", room._id)
+          .eq("roundNumber", room.roundNumber ?? 0),
+      )
+      .collect();
+    const categoryAnswers = roundAnswers.filter(
+      (answer) => answer.categoryIndex === revealIndex,
+    );
+    const categoryVotes = await ctx.db
+      .query("votes")
+      .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+        queryBuilder
+          .eq("roomId", room._id)
+          .eq("roundNumber", room.roundNumber ?? 0)
+          .eq("categoryIndex", revealIndex),
+      )
+      .collect();
+    if (!isVotingComplete(roundPlayers, categoryAnswers, categoryVotes)) {
+      throw new ConvexError("Waiting for every connected player to vote.");
+    }
+
     if (revealIndex >= room.categories.length - 1) {
-      const storedPlayers = await ctx.db
-        .query("players")
-        .withIndex("by_room", (queryBuilder) =>
-          queryBuilder.eq("roomId", room._id),
-        )
-        .collect();
-      const players = getRoundPlayers(
-        storedPlayers,
-        room.roundNumber ?? 0,
-      );
+      const players = roundPlayers;
       const answers = await ctx.db
         .query("answers")
         .withIndex("by_room_round_player_category", (queryBuilder) =>
+          queryBuilder
+            .eq("roomId", room._id)
+            .eq("roundNumber", room.roundNumber ?? 0),
+        )
+        .collect();
+      const votes = await ctx.db
+        .query("votes")
+        .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
           queryBuilder
             .eq("roomId", room._id)
             .eq("roundNumber", room.roundNumber ?? 0),
@@ -552,17 +636,20 @@ export const advanceReveal = mutation({
           player._id,
           answers.filter(
             (answer) =>
-              answer.playerId === player._id && answer.value.trim().length > 0,
+              answer.playerId === player._id &&
+              isAnswerApproved(answer, votes, players.length),
           ).length,
         ]),
       );
       const maxScore = Math.max(...scores.values());
 
-      for (const player of players) {
-        if (scores.get(player._id) === maxScore) {
-          await ctx.db.patch(player._id, {
-            points: (player.points ?? 0) + 1,
-          });
+      if (maxScore > 0) {
+        for (const player of players) {
+          if (scores.get(player._id) === maxScore) {
+            await ctx.db.patch(player._id, {
+              points: (player.points ?? 0) + 1,
+            });
+          }
         }
       }
 
@@ -571,6 +658,83 @@ export const advanceReveal = mutation({
     }
 
     await ctx.db.patch(room._id, { revealIndex: revealIndex + 1 });
+  },
+});
+
+export const voteAnswer = mutation({
+  args: {
+    code: v.string(),
+    playerToken: v.string(),
+    answerPlayerId: v.id("players"),
+    approved: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    if (!room) throw new ConvexError("Room not found.");
+    if (room.status !== "reveal" || !room.roundNumber) {
+      throw new ConvexError("Voting is only open during the reveal.");
+    }
+
+    const players = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    const roundPlayers = getRoundPlayers(players, room.roundNumber);
+    const voter = roundPlayers.find(
+      (player) => player.token === args.playerToken,
+    );
+    const answerPlayer = roundPlayers.find(
+      (player) => player._id === args.answerPlayerId,
+    );
+    if (!voter) throw new ConvexError("You are not voting in this round.");
+    if (!answerPlayer) throw new ConvexError("Unknown answer.");
+    if (voter._id === answerPlayer._id) {
+      throw new ConvexError("Your own answer already has your approval.");
+    }
+
+    const categoryIndex = room.revealIndex ?? 0;
+    const answer = await ctx.db
+      .query("answers")
+      .withIndex("by_room_round_player_category", (queryBuilder) =>
+        queryBuilder
+          .eq("roomId", room._id)
+          .eq("roundNumber", room.roundNumber)
+          .eq("playerId", answerPlayer._id)
+          .eq("categoryIndex", categoryIndex),
+      )
+      .unique();
+    if (!answer?.value.trim()) {
+      throw new ConvexError("There is no answer to vote on.");
+    }
+
+    const existingVote = await ctx.db
+      .query("votes")
+      .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+        queryBuilder
+          .eq("roomId", room._id)
+          .eq("roundNumber", room.roundNumber)
+          .eq("categoryIndex", categoryIndex)
+          .eq("answerPlayerId", answerPlayer._id)
+          .eq("voterPlayerId", voter._id),
+      )
+      .unique();
+    if (existingVote) {
+      await ctx.db.patch(existingVote._id, { approved: args.approved });
+      return;
+    }
+
+    await ctx.db.insert("votes", {
+      roomId: room._id,
+      roundNumber: room.roundNumber,
+      categoryIndex,
+      answerPlayerId: answerPlayer._id,
+      voterPlayerId: voter._id,
+      approved: args.approved,
+    });
   },
 });
 
@@ -673,10 +837,21 @@ export const get = query({
             .eq("roundNumber", room.roundNumber),
         )
         .collect();
+      const votes = await ctx.db
+        .query("votes")
+        .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+          queryBuilder
+            .eq("roomId", room._id)
+            .eq("roundNumber", room.roundNumber)
+            .eq("categoryIndex", categoryIndex),
+        )
+        .collect();
+      const requiredApprovals = Math.floor(roundPlayers.length / 2) + 1;
 
       reveal = {
         categoryIndex,
         category: room.categories[categoryIndex],
+        votingComplete: isVotingComplete(roundPlayers, answers, votes),
         answers: roundPlayers.map((player) => {
           const answer = answers.find(
             (candidate) =>
@@ -684,11 +859,33 @@ export const get = query({
               candidate.categoryIndex === categoryIndex,
           );
           const value = answer?.value ?? "";
+          const answerVotes = votes.filter(
+            (vote) => vote.answerPlayerId === player._id,
+          );
+          const approvals =
+            (value.trim() ? 1 : 0) +
+            answerVotes.filter((vote) => vote.approved).length;
+          const approved =
+            Boolean(value.trim()) && approvals >= requiredApprovals;
+          const viewerVote =
+            viewer?._id === player._id
+              ? true
+              : answerVotes.find(
+                  (vote) => vote.voterPlayerId === viewer?._id,
+                )?.approved ?? null;
           return {
             playerId: player._id,
             name: player.name,
             value,
-            score: value.trim() ? 1 : 0,
+            score: approved ? 1 : 0,
+            approvals,
+            rejections: answerVotes.filter((vote) => !vote.approved).length,
+            requiredApprovals,
+            approved,
+            viewerVote,
+            votingComplete: answer
+              ? isAnswerVotingComplete(roundPlayers, answer, votes)
+              : true,
           };
         }),
       };
@@ -704,12 +901,21 @@ export const get = query({
             .eq("roundNumber", room.roundNumber),
         )
         .collect();
+      const votes = await ctx.db
+        .query("votes")
+        .withIndex("by_room_round_category_answer_voter", (queryBuilder) =>
+          queryBuilder
+            .eq("roomId", room._id)
+            .eq("roundNumber", room.roundNumber),
+        )
+        .collect();
       const standings = roundPlayers.map((player) => ({
         playerId: player._id,
         name: player.name,
         roundScore: answers.filter(
           (answer) =>
-            answer.playerId === player._id && answer.value.trim().length > 0,
+            answer.playerId === player._id &&
+            isAnswerApproved(answer, votes, roundPlayers.length),
         ).length,
         points: player.points ?? 0,
       }));
@@ -719,7 +925,10 @@ export const get = query({
 
       results = {
         winners: standings
-          .filter((standing) => standing.roundScore === maxScore)
+          .filter(
+            (standing) =>
+              maxScore > 0 && standing.roundScore === maxScore,
+          )
           .map((standing) => ({
             playerId: standing.playerId,
             name: standing.name,
@@ -727,7 +936,8 @@ export const get = query({
         standings: standings
           .map((standing) => ({
             ...standing,
-            isWinner: standing.roundScore === maxScore,
+            isWinner:
+              maxScore > 0 && standing.roundScore === maxScore,
           }))
           .sort((first, second) => second.roundScore - first.roundScore),
       };

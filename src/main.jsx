@@ -432,7 +432,14 @@ function PlayingRound({ room, onSaveAnswer }) {
   );
 }
 
-function RevealRound({ room, advancing, error, onAdvance }) {
+function RevealRound({
+  room,
+  advancing,
+  error,
+  onAdvance,
+  onVote,
+  votingAnswerId,
+}) {
   const isLastCategory =
     room.reveal.categoryIndex === room.categories.length - 1;
 
@@ -453,31 +460,81 @@ function RevealRound({ room, advancing, error, onAdvance }) {
       <div className="reveal-grid">
         {room.reveal.answers.map((answer, index) => (
           <article
-            className="answer-card"
+            className={`answer-card ${
+              answer.approved
+                ? "is-approved"
+                : answer.votingComplete && answer.value.trim()
+                  ? "is-rejected"
+                  : ""
+            }`}
             key={answer.playerId}
             style={{ "--delay": `${index * 90}ms` }}
           >
             <div className="avatar">{answer.name.slice(0, 1).toUpperCase()}</div>
             <span>{answer.name}</span>
             <strong>{answer.value.trim() || "No answer"}</strong>
-            <em>{answer.score ? "+1" : "0"}</em>
+            {answer.value.trim() ? (
+              <>
+                <em className="vote-summary">
+                  {answer.approved
+                    ? `Approved · +1`
+                    : answer.votingComplete
+                      ? "Rejected · 0"
+                      : `${answer.approvals} approval${
+                          answer.approvals === 1 ? "" : "s"
+                        } · ${answer.requiredApprovals} needed`}
+                </em>
+                {answer.playerId === room.viewer.id ? (
+                  <span className="own-vote">
+                    Your approval is automatic.
+                  </span>
+                ) : (
+                  <div className="vote-actions">
+                    <button
+                      aria-label={`Approve ${answer.name}'s answer`}
+                      className={answer.viewerVote === true ? "active approve" : ""}
+                      disabled={votingAnswerId === answer.playerId}
+                      onClick={() => onVote(answer.playerId, true)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      aria-label={`Reject ${answer.name}'s answer`}
+                      className={answer.viewerVote === false ? "active reject" : ""}
+                      disabled={votingAnswerId === answer.playerId}
+                      onClick={() => onVote(answer.playerId, false)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <em className="vote-summary">No vote needed · 0</em>
+            )}
           </article>
         ))}
       </div>
       {room.viewer.isHost ? (
         <button
           className="primary-button"
-          disabled={advancing}
+          disabled={advancing || !room.reveal.votingComplete}
           onClick={onAdvance}
         >
-          {advancing
+          {!room.reveal.votingComplete
+            ? "Waiting for votes..."
+            : advancing
             ? "Updating..."
             : isLastCategory
               ? "See results"
               : "Next category"}
         </button>
       ) : (
-        <p className="microcopy">Waiting for the host to continue.</p>
+        <p className="microcopy">
+          {room.reveal.votingComplete
+            ? "Voting complete. Waiting for the host."
+            : "Vote on every other player’s non-empty answer."}
+        </p>
       )}
       {error && <p className="error-message">{error}</p>}
     </div>
@@ -485,6 +542,7 @@ function RevealRound({ room, advancing, error, onAdvance }) {
 }
 
 function Results({ room, error, onReturnToLobby, returning }) {
+  const noWinner = room.results.winners.length === 0;
   const tied = room.results.winners.length > 1;
   const winnerNames = room.results.winners
     .map((winner) => winner.name)
@@ -493,9 +551,19 @@ function Results({ room, error, onReturnToLobby, returning }) {
   return (
     <div className="results-content">
       <span className="eyebrow">Round {room.roundNumber} complete</span>
-      <h2>{tied ? "It’s a tie" : `${winnerNames} wins`}</h2>
+      <h2>
+        {noWinner
+          ? "No winner this round"
+          : tied
+            ? "It’s a tie"
+            : `${winnerNames} wins`}
+      </h2>
       <p>
-        {winnerNames} {tied ? "each get a round point." : "gets the round point."}
+        {noWinner
+          ? "No answers earned majority approval."
+          : `${winnerNames} ${
+              tied ? "each get a round point." : "gets the round point."
+            }`}
       </p>
       <div className="scoreboard">
         {room.results.standings.map((standing, index) => (
@@ -646,6 +714,7 @@ function RoomApp() {
   const [starting, setStarting] = useState(false);
   const [revealError, setRevealError] = useState("");
   const [advancingReveal, setAdvancingReveal] = useState(false);
+  const [votingAnswerId, setVotingAnswerId] = useState("");
   const [returnError, setReturnError] = useState("");
   const [returning, setReturning] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -656,6 +725,7 @@ function RoomApp() {
   const setReady = useMutation(api.rooms.setReady);
   const startRound = useMutation(api.rooms.startRound);
   const saveAnswer = useMutation(api.rooms.saveAnswer);
+  const voteAnswer = useMutation(api.rooms.voteAnswer);
   const advanceReveal = useMutation(api.rooms.advanceReveal);
   const returnToLobby = useMutation(api.rooms.returnToLobby);
   const room = useQuery(
@@ -732,6 +802,23 @@ function RoomApp() {
     } catch (error) {
       setRevealError(getErrorMessage(error));
       setAdvancingReveal(false);
+    }
+  };
+
+  const handleVote = async (answerPlayerId, approved) => {
+    setVotingAnswerId(answerPlayerId);
+    setRevealError("");
+    try {
+      await voteAnswer({
+        code: roomCode,
+        playerToken,
+        answerPlayerId,
+        approved,
+      });
+    } catch (error) {
+      setRevealError(getErrorMessage(error));
+    } finally {
+      setVotingAnswerId("");
     }
   };
 
@@ -833,7 +920,9 @@ function RoomApp() {
           advancing={advancingReveal}
           error={revealError}
           onAdvance={handleAdvanceReveal}
+          onVote={handleVote}
           room={room}
+          votingAnswerId={votingAnswerId}
         />
       </GameShell>
     );

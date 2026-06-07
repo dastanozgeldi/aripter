@@ -40,7 +40,9 @@ The Convex room entry flow is live:
 - answers save privately during play and lock at the deadline
 - locked answers are revealed to everyone one category at a time
 - the host advances the reveal and opens the results
-- non-empty answers score one word; every tied winner gets a point
+- players approve or reject each other’s revealed answers
+- only answers with a strict player majority score one word
+- every tied winner gets a point
 - cumulative points survive when the host opens another round
 
 Word legitimacy checks remain intentionally outside the MVP.
