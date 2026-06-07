@@ -8,7 +8,7 @@
  * @module
  */
 
-import type * as status from "../status.js";
+import type * as rooms from "../rooms.js";
 
 import type {
   ApiFromModules,
@@ -17,7 +17,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  status: typeof status;
+  rooms: typeof rooms;
 }>;
 
 /**

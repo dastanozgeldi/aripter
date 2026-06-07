@@ -26,5 +26,11 @@ The app is connected to Convex. In Vercel, add a production
 npx convex deploy --cmd "npm run build"
 ```
 
-The current game loop is still local and uses simulated players. Convex room
-state will replace it in the next implementation step.
+The Convex room entry flow is live:
+
+- hosts create rooms with shareable `?room=CODE` links
+- each browser keeps a private guest token in local storage
+- invited players join by name
+- the lobby player list and ready states update in realtime
+
+Round start, answers, reveal, and scoring are the next backend slices.
