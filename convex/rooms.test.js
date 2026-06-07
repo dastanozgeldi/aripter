@@ -109,6 +109,206 @@ test("rejoining with the same browser token does not duplicate the player", asyn
   expect(room?.players).toHaveLength(2);
 });
 
+test("host authority transfers when the host disconnects", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+
+  vi.advanceTimersByTime(29_000);
+  await t.mutation(api.rooms.heartbeat, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  vi.advanceTimersByTime(1_001);
+  await t.finishInProgressScheduledFunctions();
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+
+  expect(room?.players).toMatchObject([
+    { name: "Dastan", isHost: false, online: false },
+    { name: "Masha", isHost: true, online: true },
+  ]);
+  expect(room?.viewer).toMatchObject({
+    name: "Masha",
+    isHost: true,
+    online: true,
+  });
+});
+
+test("the first player back becomes host when everyone disconnected", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+
+  vi.advanceTimersByTime(30_001);
+  await t.finishInProgressScheduledFunctions();
+  await t.mutation(api.rooms.heartbeat, {
+    code,
+    playerToken: "host-browser-token",
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room?.viewer).toMatchObject({
+    name: "Dastan",
+    isHost: true,
+    online: true,
+  });
+});
+
+test("a disconnected player reconnects with the same seat during a round", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+
+  vi.advanceTimersByTime(29_000);
+  await t.mutation(api.rooms.heartbeat, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  vi.advanceTimersByTime(1_001);
+  await t.finishInProgressScheduledFunctions();
+
+  const disconnectedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  const playerId = disconnectedRoom?.viewer?.id;
+  expect(disconnectedRoom?.viewer?.online).toBe(false);
+
+  await t.mutation(api.rooms.heartbeat, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  const reconnectedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+
+  expect(reconnectedRoom?.players).toHaveLength(2);
+  expect(reconnectedRoom?.viewer).toMatchObject({
+    id: playerId,
+    name: "Masha",
+    online: true,
+  });
+  expect(reconnectedRoom?.viewerAnswers).toEqual(["The Matrix", ""]);
+});
+
+test("leaving removes the player and immediately transfers host authority", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+
+  await t.mutation(api.rooms.leave, {
+    code,
+    playerToken: "host-browser-token",
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+
+  expect(room?.players).toMatchObject([
+    { name: "Masha", isHost: true, online: true },
+  ]);
+  expect(room?.viewer).toMatchObject({
+    name: "Masha",
+    isHost: true,
+  });
+});
+
+test("rooms expire after 24 hours", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+
+  vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1);
+  await t.finishInProgressScheduledFunctions();
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room).toBeNull();
+});
+
 test("a player can change their own ready state", async () => {
   const t = convexTest(schema, modules);
   const { code } = await t.mutation(api.rooms.create, {
@@ -273,6 +473,78 @@ test("the host cannot start until every player is ready", async () => {
       hostToken: "host-browser-token",
     }),
   ).rejects.toThrow("Every player must be ready.");
+});
+
+test("disconnected players do not join a round or block it from starting", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "stale-browser-token",
+    playerName: "Alex",
+  });
+
+  vi.advanceTimersByTime(29_000);
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.heartbeat, { code, playerToken });
+  }
+  vi.advanceTimersByTime(1_001);
+  await t.finishInProgressScheduledFunctions();
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room?.status).toBe("playing");
+  expect(room?.players).toMatchObject([
+    { name: "Dastan", online: true },
+    { name: "Masha", online: true },
+    { name: "Alex", online: false },
+  ]);
+
+  await t.run(async (ctx) => {
+    const storedRoom = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(storedRoom._id, {
+      status: "reveal",
+      revealIndex: 1,
+    });
+  });
+  await t.mutation(api.rooms.advanceReveal, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  const resultsRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(resultsRoom?.results?.standings.map((standing) => standing.name)).toEqual([
+    "Dastan",
+    "Masha",
+  ]);
 });
 
 test("the room advances when the shared deadline expires", async () => {

@@ -18,7 +18,10 @@ export default defineSchema({
     letter: v.optional(v.string()),
     roundEndsAt: v.optional(v.number()),
     revealIndex: v.optional(v.number()),
-  }).index("by_code", ["code"]),
+    expiresAt: v.optional(v.number()),
+  })
+    .index("by_code", ["code"])
+    .index("by_expires_at", ["expiresAt"]),
 
   players: defineTable({
     roomId: v.id("rooms"),
@@ -27,6 +30,9 @@ export default defineSchema({
     isHost: v.boolean(),
     ready: v.boolean(),
     points: v.optional(v.number()),
+    online: v.optional(v.boolean()),
+    lastSeenAt: v.optional(v.number()),
+    activeRoundNumber: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_and_token", ["roomId", "token"]),

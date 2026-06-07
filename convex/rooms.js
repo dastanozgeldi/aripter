@@ -5,6 +5,8 @@ import { internalMutation, mutation, query } from "./_generated/server";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_LENGTH = 6;
+const PRESENCE_TIMEOUT_MS = 30_000;
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const LETTERS_BY_LANGUAGE = {
   Russian: ["А", "Б", "В", "Г", "Д", "Е", "Ж", "З", "И", "К", "Л", "М", "Н", "О", "П", "Р", "С", "Т", "У", "Ф", "Х", "Ц", "Ч", "Ш", "Э", "Ю", "Я"],
   English: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""),
@@ -45,6 +47,38 @@ async function createUniqueCode(ctx) {
   throw new ConvexError("Could not create a unique room code.");
 }
 
+async function schedulePresenceTimeout(ctx, playerId, lastSeenAt) {
+  await ctx.scheduler.runAt(
+    lastSeenAt + PRESENCE_TIMEOUT_MS,
+    internal.rooms.markPlayerOffline,
+    { playerId, lastSeenAt },
+  );
+}
+
+async function deleteRoomData(ctx, roomId) {
+  const answers = await ctx.db
+    .query("answers")
+    .withIndex("by_room_round_player_category", (queryBuilder) =>
+      queryBuilder.eq("roomId", roomId),
+    )
+    .collect();
+  const players = await ctx.db
+    .query("players")
+    .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", roomId))
+    .collect();
+
+  for (const answer of answers) await ctx.db.delete(answer._id);
+  for (const player of players) await ctx.db.delete(player._id);
+  await ctx.db.delete(roomId);
+}
+
+function getRoundPlayers(players, roundNumber) {
+  const participants = players.filter(
+    (player) => player.activeRoundNumber === roundNumber,
+  );
+  return participants.length > 0 ? participants : players;
+}
+
 export const create = mutation({
   args: {
     hostToken: v.string(),
@@ -60,6 +94,7 @@ export const create = mutation({
     }
 
     const code = await createUniqueCode(ctx);
+    const expiresAt = Date.now() + ROOM_TTL_MS;
     const roomId = await ctx.db.insert("rooms", {
       code,
       status: "lobby",
@@ -67,17 +102,38 @@ export const create = mutation({
       categories: normalizeCategories(args.categories),
       durationSeconds: args.durationSeconds,
       hostToken: args.hostToken,
+      expiresAt,
     });
 
-    await ctx.db.insert("players", {
+    const lastSeenAt = Date.now();
+    const playerId = await ctx.db.insert("players", {
       roomId,
       token: args.hostToken,
       name: normalizeName(args.hostName),
       isHost: true,
       ready: false,
+      online: true,
+      lastSeenAt,
+    });
+    await schedulePresenceTimeout(ctx, playerId, lastSeenAt);
+    await ctx.scheduler.runAt(expiresAt, internal.rooms.expireRoom, {
+      roomId,
+      expiresAt,
     });
 
     return { code };
+  },
+});
+
+export const expireRoom = internalMutation({
+  args: {
+    roomId: v.id("rooms"),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const room = await ctx.db.get("rooms", args.roomId);
+    if (!room || room.expiresAt !== args.expiresAt) return;
+    await deleteRoomData(ctx, room._id);
   },
 });
 
@@ -109,21 +165,155 @@ export const join = mutation({
       .unique();
 
     if (existingPlayer) {
+      const lastSeenAt = Date.now();
       await ctx.db.patch(existingPlayer._id, {
         name: normalizeName(args.playerName),
+        online: true,
+        lastSeenAt,
       });
+      await schedulePresenceTimeout(ctx, existingPlayer._id, lastSeenAt);
       return { code: room.code };
     }
 
-    await ctx.db.insert("players", {
+    const lastSeenAt = Date.now();
+    const playerId = await ctx.db.insert("players", {
       roomId: room._id,
       token: args.playerToken,
       name: normalizeName(args.playerName),
       isHost: false,
       ready: false,
+      online: true,
+      lastSeenAt,
     });
+    await schedulePresenceTimeout(ctx, playerId, lastSeenAt);
 
     return { code: room.code };
+  },
+});
+
+export const heartbeat = mutation({
+  args: {
+    code: v.string(),
+    playerToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    if (!room) throw new ConvexError("Room not found.");
+
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_room_and_token", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id).eq("token", args.playerToken),
+      )
+      .unique();
+    if (!player) throw new ConvexError("Join the room before reconnecting.");
+
+    const lastSeenAt = Date.now();
+    await ctx.db.patch(player._id, { online: true, lastSeenAt });
+    await schedulePresenceTimeout(ctx, player._id, lastSeenAt);
+
+    if (room.hostToken !== player.token) {
+      const currentHost = await ctx.db
+        .query("players")
+        .withIndex("by_room_and_token", (queryBuilder) =>
+          queryBuilder.eq("roomId", room._id).eq("token", room.hostToken),
+        )
+        .unique();
+      if (!currentHost || currentHost.online === false) {
+        if (currentHost) {
+          await ctx.db.patch(currentHost._id, { isHost: false });
+        }
+        await ctx.db.patch(player._id, { isHost: true });
+        await ctx.db.patch(room._id, { hostToken: player.token });
+      }
+    }
+  },
+});
+
+export const markPlayerOffline = internalMutation({
+  args: {
+    playerId: v.id("players"),
+    lastSeenAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const player = await ctx.db.get("players", args.playerId);
+    if (!player || player.lastSeenAt !== args.lastSeenAt) return;
+
+    await ctx.db.patch(player._id, { online: false });
+    if (!player.isHost) return;
+
+    const players = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) =>
+        queryBuilder.eq("roomId", player.roomId),
+      )
+      .collect();
+    const nextHost = players
+      .filter((candidate) => candidate._id !== player._id && candidate.online)
+      .sort((first, second) => first._creationTime - second._creationTime)[0];
+    if (!nextHost) return;
+
+    await ctx.db.patch(player._id, { isHost: false });
+    await ctx.db.patch(nextHost._id, { isHost: true });
+    await ctx.db.patch(player.roomId, { hostToken: nextHost.token });
+  },
+});
+
+export const leave = mutation({
+  args: {
+    code: v.string(),
+    playerToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    if (!room) return;
+
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_room_and_token", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id).eq("token", args.playerToken),
+      )
+      .unique();
+    if (!player) return;
+
+    const answers = await ctx.db
+      .query("answers")
+      .withIndex("by_room_round_player_category", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id),
+      )
+      .collect();
+    for (const answer of answers) {
+      if (answer.playerId === player._id) await ctx.db.delete(answer._id);
+    }
+    await ctx.db.delete(player._id);
+
+    const remainingPlayers = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id),
+      )
+      .collect();
+    if (remainingPlayers.length === 0) {
+      await deleteRoomData(ctx, room._id);
+      return;
+    }
+    if (!player.isHost) return;
+
+    const orderedPlayers = remainingPlayers.sort(
+      (first, second) => first._creationTime - second._creationTime,
+    );
+    const nextHost =
+      orderedPlayers.find((candidate) => candidate.online) ?? orderedPlayers[0];
+    await ctx.db.patch(nextHost._id, { isHost: true });
+    await ctx.db.patch(room._id, { hostToken: nextHost.token });
   },
 });
 
@@ -182,11 +372,12 @@ export const startRound = mutation({
       .query("players")
       .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
       .collect();
+    const connectedPlayers = players.filter((player) => player.online !== false);
 
-    if (players.length < 2) {
+    if (connectedPlayers.length < 2) {
       throw new ConvexError("At least two players are required.");
     }
-    if (players.some((player) => !player.ready)) {
+    if (connectedPlayers.some((player) => !player.ready)) {
       throw new ConvexError("Every player must be ready.");
     }
 
@@ -197,6 +388,9 @@ export const startRound = mutation({
     const letter = letters[Math.floor(Math.random() * letters.length)];
     const roundEndsAt = Date.now() + room.durationSeconds * 1000;
 
+    for (const player of connectedPlayers) {
+      await ctx.db.patch(player._id, { activeRoundNumber: roundNumber });
+    }
     await ctx.db.patch(room._id, {
       status: "playing",
       roundNumber,
@@ -273,6 +467,21 @@ export const saveAnswer = mutation({
     if (!player) throw new ConvexError("Join the room before answering.");
 
     const roundNumber = room.roundNumber ?? 0;
+    if (player.activeRoundNumber !== roundNumber) {
+      const players = await ctx.db
+        .query("players")
+        .withIndex("by_room", (queryBuilder) =>
+          queryBuilder.eq("roomId", room._id),
+        )
+        .collect();
+      if (
+        players.some(
+          (candidate) => candidate.activeRoundNumber === roundNumber,
+        )
+      ) {
+        throw new ConvexError("You are not playing in this round.");
+      }
+    }
     const existingAnswer = await ctx.db
       .query("answers")
       .withIndex("by_room_round_player_category", (queryBuilder) =>
@@ -320,12 +529,16 @@ export const advanceReveal = mutation({
 
     const revealIndex = room.revealIndex ?? 0;
     if (revealIndex >= room.categories.length - 1) {
-      const players = await ctx.db
+      const storedPlayers = await ctx.db
         .query("players")
         .withIndex("by_room", (queryBuilder) =>
           queryBuilder.eq("roomId", room._id),
         )
         .collect();
+      const players = getRoundPlayers(
+        storedPlayers,
+        room.roundNumber ?? 0,
+      );
       const answers = await ctx.db
         .query("answers")
         .withIndex("by_room_round_player_category", (queryBuilder) =>
@@ -415,12 +628,17 @@ export const get = query({
     const orderedPlayers = players.sort(
       (first, second) => first._creationTime - second._creationTime,
     );
+    const roundPlayers = getRoundPlayers(
+      orderedPlayers,
+      room.roundNumber ?? 0,
+    );
     const publicPlayers = orderedPlayers.map((player) => ({
       id: player._id,
       name: player.name,
       isHost: player.isHost,
       ready: player.ready,
       points: player.points ?? 0,
+      online: player.online ?? false,
     }));
     const viewer = players.find((player) => player.token === args.playerToken);
     const viewerAnswers = Array.from(
@@ -459,7 +677,7 @@ export const get = query({
       reveal = {
         categoryIndex,
         category: room.categories[categoryIndex],
-        answers: orderedPlayers.map((player) => {
+        answers: roundPlayers.map((player) => {
           const answer = answers.find(
             (candidate) =>
               candidate.playerId === player._id &&
@@ -486,7 +704,7 @@ export const get = query({
             .eq("roundNumber", room.roundNumber),
         )
         .collect();
-      const standings = orderedPlayers.map((player) => ({
+      const standings = roundPlayers.map((player) => ({
         playerId: player._id,
         name: player.name,
         roundScore: answers.filter(
@@ -535,6 +753,7 @@ export const get = query({
             name: viewer.name,
             isHost: viewer.isHost,
             ready: viewer.ready,
+            online: viewer.online ?? false,
           }
         : null,
     };

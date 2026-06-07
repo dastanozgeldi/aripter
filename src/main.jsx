@@ -19,11 +19,19 @@ const INITIAL_CATEGORIES = [
   "Песня",
   "Станция в Токио",
 ];
-const PLAYER_TOKEN_KEY = "obds-player-token";
+const PLAYER_TOKEN_KEY = "wordlord-player-token";
+const LEGACY_PLAYER_TOKEN_KEY = "obds-player-token";
 
 function getPlayerToken() {
   const storedToken = window.localStorage.getItem(PLAYER_TOKEN_KEY);
   if (storedToken) return storedToken;
+
+  const legacyToken = window.localStorage.getItem(LEGACY_PLAYER_TOKEN_KEY);
+  if (legacyToken) {
+    window.localStorage.setItem(PLAYER_TOKEN_KEY, legacyToken);
+    window.localStorage.removeItem(LEGACY_PLAYER_TOKEN_KEY);
+    return legacyToken;
+  }
 
   const token =
     window.crypto?.randomUUID?.() ??
@@ -253,8 +261,10 @@ function Lobby({
   startError,
   starting,
 }) {
-  const readyCount = room.players.filter((player) => player.ready).length;
-  const allReady = room.players.length > 1 && readyCount === room.players.length;
+  const connectedPlayers = room.players.filter((player) => player.online);
+  const readyCount = connectedPlayers.filter((player) => player.ready).length;
+  const allReady =
+    connectedPlayers.length > 1 && readyCount === connectedPlayers.length;
 
   return (
     <div className="lobby-content">
@@ -280,13 +290,16 @@ function Lobby({
         <div className="section-heading">
           <span>Players</span>
           <span>
-            {readyCount}/{room.players.length} ready
+            {readyCount}/{connectedPlayers.length} connected ready
           </span>
         </div>
         {room.players.map((player) => {
           const isViewer = player.id === room.viewer.id;
           return (
-            <div className="player-row" key={player.id}>
+            <div
+              className={`player-row ${player.online ? "" : "is-offline"}`}
+              key={player.id}
+            >
               <div className="avatar">{player.name.slice(0, 1).toUpperCase()}</div>
               <div className="player-name">
                 <strong>
@@ -294,7 +307,8 @@ function Lobby({
                   {isViewer ? " (you)" : ""}
                 </strong>
                 <span>
-                  {player.isHost ? "Host" : "Player"} · {player.points}{" "}
+                  {player.isHost ? "Host" : "Player"} ·{" "}
+                  {player.online ? "Online" : "Offline"} · {player.points}{" "}
                   {player.points === 1 ? "pt" : "pts"}
                 </span>
               </div>
@@ -307,7 +321,11 @@ function Lobby({
                 </button>
               ) : (
                 <span className={`ready-button status-only ${player.ready ? "is-ready" : ""}`}>
-                  {player.ready ? "Ready" : "Not ready"}
+                  {player.online
+                    ? player.ready
+                      ? "Ready"
+                      : "Not ready"
+                    : "Offline"}
                 </span>
               )}
             </div>
@@ -331,7 +349,9 @@ function Lobby({
           ? room.viewer.isHost
             ? "Everyone is ready. Start when you are."
             : "Everyone is ready. Waiting for the host."
-          : "This lobby updates live. Everyone marks themselves ready."}
+          : room.players.some((player) => !player.online)
+            ? "Offline players can return with the same invite link."
+            : "This lobby updates live. Everyone marks themselves ready."}
       </p>
     </div>
   );
@@ -549,15 +569,31 @@ function MissingRoom({ onLeave }) {
   );
 }
 
-function GameShell({ stageNumber, children, showIntro = false }) {
+function GameShell({
+  stageNumber,
+  children,
+  leaving = false,
+  onLeaveRoom,
+  showIntro = false,
+}) {
   return (
     <main className="game-app">
       <header className="party-header">
         <a className="brand" href="/">
-          ОБДС<span>beta</span>
+          WORDLORD<span>beta</span>
         </a>
         <div className="round-pill">One letter · Loads of words</div>
-        <button className="header-link">How to play</button>
+        {onLeaveRoom ? (
+          <button
+            className="header-link"
+            disabled={leaving}
+            onClick={onLeaveRoom}
+          >
+            {leaving ? "Leaving..." : "Leave room"}
+          </button>
+        ) : (
+          <button className="header-link">How to play</button>
+        )}
       </header>
 
       <div className="party-shell">
@@ -612,8 +648,11 @@ function RoomApp() {
   const [advancingReveal, setAdvancingReveal] = useState(false);
   const [returnError, setReturnError] = useState("");
   const [returning, setReturning] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const createRoom = useMutation(api.rooms.create);
   const joinRoom = useMutation(api.rooms.join);
+  const heartbeat = useMutation(api.rooms.heartbeat);
+  const leaveRoom = useMutation(api.rooms.leave);
   const setReady = useMutation(api.rooms.setReady);
   const startRound = useMutation(api.rooms.startRound);
   const saveAnswer = useMutation(api.rooms.saveAnswer);
@@ -630,6 +669,27 @@ function RoomApp() {
     if (room.status !== "lobby") setStarting(false);
     if (room.status === "lobby") setReturning(false);
   }, [room?.status, room?.revealIndex]);
+
+  useEffect(() => {
+    if (!roomCode || !room?.viewer) return undefined;
+
+    const sendHeartbeat = () => {
+      heartbeat({ code: roomCode, playerToken }).catch(() => {});
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") sendHeartbeat();
+    };
+
+    sendHeartbeat();
+    const interval = window.setInterval(sendHeartbeat, 10_000);
+    window.addEventListener("focus", sendHeartbeat);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", sendHeartbeat);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [heartbeat, playerToken, room?.viewer?.id, roomCode]);
 
   const handleCreate = async (settings) => {
     const result = await createRoom({
@@ -686,6 +746,16 @@ function RoomApp() {
     }
   };
 
+  const handleLeaveRoom = async () => {
+    setLeaving(true);
+    try {
+      await leaveRoom({ code: roomCode, playerToken });
+      navigateToRoom("");
+    } catch {
+      setLeaving(false);
+    }
+  };
+
   if (!roomCode) {
     return (
       <GameShell showIntro stageNumber={1}>
@@ -732,7 +802,11 @@ function RoomApp() {
 
   if (room.status === "playing") {
     return (
-      <GameShell stageNumber={3}>
+      <GameShell
+        leaving={leaving}
+        onLeaveRoom={handleLeaveRoom}
+        stageNumber={3}
+      >
         <PlayingRound
           onSaveAnswer={(categoryIndex, value) =>
             saveAnswer({
@@ -750,7 +824,11 @@ function RoomApp() {
 
   if (room.status === "reveal") {
     return (
-      <GameShell stageNumber={4}>
+      <GameShell
+        leaving={leaving}
+        onLeaveRoom={handleLeaveRoom}
+        stageNumber={4}
+      >
         <RevealRound
           advancing={advancingReveal}
           error={revealError}
@@ -763,7 +841,11 @@ function RoomApp() {
 
   if (room.status === "results") {
     return (
-      <GameShell stageNumber={5}>
+      <GameShell
+        leaving={leaving}
+        onLeaveRoom={handleLeaveRoom}
+        stageNumber={5}
+      >
         <Results
           error={returnError}
           onReturnToLobby={handleReturnToLobby}
@@ -775,7 +857,11 @@ function RoomApp() {
   }
 
   return (
-    <GameShell stageNumber={2}>
+    <GameShell
+      leaving={leaving}
+      onLeaveRoom={handleLeaveRoom}
+      stageNumber={2}
+    >
       <Lobby
         copied={copied}
         onCopyLink={handleCopyLink}

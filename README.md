@@ -1,4 +1,4 @@
-# ОБДС
+# Wordlord
 
 Multiplayer category game: one letter, loads of words.
 
@@ -32,6 +32,9 @@ The Convex room entry flow is live:
 - each browser keeps a private guest token in local storage
 - invited players join by name
 - the lobby player list and ready states update in realtime
+- presence updates live, disconnected players can reclaim their seat, and host
+  authority transfers when needed
+- players can explicitly leave; abandoned rooms expire after 24 hours
 - only the host can start after everyone is ready
 - Convex selects the letter and owns the shared round deadline
 - answers save privately during play and lock at the deadline
