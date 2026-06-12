@@ -10,6 +10,7 @@ const modules = import.meta.glob("./**/!(*.*.*)*.*s");
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 test("creating a room makes the creator its host", async () => {
@@ -412,6 +413,38 @@ test("the host starts a shared round after everyone is ready", async () => {
     roundEndsAt: Date.now() + 60_000,
   });
   expect(room?.letter).toMatch(/^[A-Z]$/);
+});
+
+test("a Kazakh room starts with a Kazakh letter", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0.04);
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "Kazakh",
+    categories: ["Қала", "Ән"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room?.language).toBe("Kazakh");
+  expect(room?.letter).toBe("Ә");
 });
 
 test("a non-host cannot start the round", async () => {

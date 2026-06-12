@@ -12,7 +12,7 @@ import "./styles.css";
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
 const convex = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
-const LANGUAGES = ["Russian", "English", "Japanese"];
+const LANGUAGES = ["Russian", "Kazakh", "English", "Japanese"];
 const INITIAL_CATEGORIES = [
   "Болезнь",
   "Фильм",
