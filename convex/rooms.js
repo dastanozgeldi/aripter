@@ -88,6 +88,8 @@ function getRoundPlayers(players, roundNumber) {
 }
 
 function isAnswerVotingComplete(players, answer, votes) {
+  if (!answer.value.trim()) return true;
+
   const connectedPlayers = players.filter((player) => player.online !== false);
   return connectedPlayers
     .filter((player) => player._id !== answer.playerId)
@@ -95,15 +97,14 @@ function isAnswerVotingComplete(players, answer, votes) {
       votes.some(
         (vote) =>
           vote.answerPlayerId === answer.playerId &&
+          vote.categoryIndex === answer.categoryIndex &&
           vote.voterPlayerId === player._id,
       ),
     );
 }
 
 function isVotingComplete(players, answers, votes) {
-  return answers
-    .filter((answer) => answer.value.trim())
-    .every((answer) => isAnswerVotingComplete(players, answer, votes));
+  return answers.every((answer) => isAnswerVotingComplete(players, answer, votes));
 }
 
 function isAnswerApproved(answer, votes, playerCount) {
@@ -847,12 +848,15 @@ export const get = query({
             .eq("categoryIndex", categoryIndex),
         )
         .collect();
+      const categoryAnswers = answers.filter(
+        (answer) => answer.categoryIndex === categoryIndex,
+      );
       const requiredApprovals = Math.floor(roundPlayers.length / 2) + 1;
 
       reveal = {
         categoryIndex,
         category: room.categories[categoryIndex],
-        votingComplete: isVotingComplete(roundPlayers, answers, votes),
+        votingComplete: isVotingComplete(roundPlayers, categoryAnswers, votes),
         answers: roundPlayers.map((player) => {
           const answer = answers.find(
             (candidate) =>

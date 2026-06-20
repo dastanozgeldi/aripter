@@ -993,6 +993,78 @@ test("the host cannot advance while connected peer votes are missing", async () 
   expect(advancedRoom?.reveal?.categoryIndex).toBe(1);
 });
 
+test("empty answers in the current category do not keep reveal voting stuck", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    categoryIndex: 1,
+    value: "",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    categoryIndex: 1,
+    value: "Thriller",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "reveal", revealIndex: 1 });
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  const masha = room.reveal.answers.find((answer) => answer.name === "Masha");
+  await t.mutation(api.rooms.voteAnswer, {
+    code,
+    playerToken: "host-browser-token",
+    answerPlayerId: masha.playerId,
+    approved: true,
+  });
+
+  const votedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(votedRoom?.reveal?.votingComplete).toBe(true);
+  expect(
+    votedRoom?.reveal?.answers.find((answer) => answer.name === "Dastan"),
+  ).toMatchObject({
+    value: "",
+    votingComplete: true,
+  });
+});
+
 test("only the host advances the shared reveal category", async () => {
   const t = convexTest(schema, modules);
   const { code } = await t.mutation(api.rooms.create, {
