@@ -5,6 +5,9 @@ import { internalMutation, mutation, query } from "./_generated/server";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_LENGTH = 6;
+const MIN_CATEGORIES = 2;
+const MIN_ROUND_SECONDS = 5;
+const MAX_ROUND_SECONDS = 60 * 60;
 const PRESENCE_TIMEOUT_MS = 30_000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const LETTERS_BY_LANGUAGE = {
@@ -24,10 +27,21 @@ function normalizeName(name) {
 
 function normalizeCategories(categories) {
   const normalized = categories.map((category) => category.trim()).filter(Boolean);
-  if (normalized.length < 2 || normalized.length > 8) {
-    throw new ConvexError("Choose between 2 and 8 categories.");
+  if (normalized.length < MIN_CATEGORIES) {
+    throw new ConvexError("Choose at least 2 categories.");
   }
   return normalized;
+}
+
+function normalizeDurationSeconds(durationSeconds) {
+  if (
+    !Number.isInteger(durationSeconds) ||
+    durationSeconds < MIN_ROUND_SECONDS ||
+    durationSeconds > MAX_ROUND_SECONDS
+  ) {
+    throw new ConvexError("Choose a round duration between 5 seconds and 60 minutes.");
+  }
+  return durationSeconds;
 }
 
 async function createUniqueCode(ctx) {
@@ -130,9 +144,8 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     if (!args.hostToken) throw new ConvexError("Missing browser identity.");
-    if (![15, 60, 120].includes(args.durationSeconds)) {
-      throw new ConvexError("Unsupported round duration.");
-    }
+    const categories = normalizeCategories(args.categories);
+    const durationSeconds = normalizeDurationSeconds(args.durationSeconds);
 
     const code = await createUniqueCode(ctx);
     const expiresAt = Date.now() + ROOM_TTL_MS;
@@ -140,8 +153,8 @@ export const create = mutation({
       code,
       status: "lobby",
       language: args.language,
-      categories: normalizeCategories(args.categories),
-      durationSeconds: args.durationSeconds,
+      categories,
+      durationSeconds,
       hostToken: args.hostToken,
       expiresAt,
     });

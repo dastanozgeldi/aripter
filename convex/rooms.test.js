@@ -52,6 +52,46 @@ test("creating a room makes the creator its host", async () => {
   });
 });
 
+test("creating a room accepts custom round time and more than eight categories", async () => {
+  const t = convexTest(schema, modules);
+  const categories = Array.from(
+    { length: 12 },
+    (_, index) => `Category ${index + 1}`,
+  );
+
+  const result = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories,
+    durationSeconds: 90,
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code: result.code,
+    playerToken: "host-browser-token",
+  });
+
+  expect(room).toMatchObject({
+    categories,
+    durationSeconds: 90,
+  });
+});
+
+test("creating a room rejects invalid custom round times", async () => {
+  const t = convexTest(schema, modules);
+
+  await expect(
+    t.mutation(api.rooms.create, {
+      hostToken: "host-browser-token",
+      hostName: "Dastan",
+      language: "English",
+      categories: ["Movie", "Song"],
+      durationSeconds: 0,
+    }),
+  ).rejects.toThrow("Choose a round duration between 5 seconds and 60 minutes.");
+});
+
 test("a second browser can join an existing lobby by code", async () => {
   const t = convexTest(schema, modules);
   const { code } = await t.mutation(api.rooms.create, {

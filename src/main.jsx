@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ConvexProvider,
   ConvexReactClient,
@@ -19,6 +19,9 @@ const INITIAL_CATEGORIES = [
   "Песня",
   "Станция в Токио",
 ];
+const MIN_ROUND_SECONDS = 5;
+const MAX_ROUND_SECONDS = 60 * 60;
+const MAX_SECONDS_FIELD = 59;
 const PLAYER_TOKEN_KEY = "wordlord-player-token";
 const LEGACY_PLAYER_TOKEN_KEY = "obds-player-token";
 
@@ -72,13 +75,72 @@ function getErrorMessage(error) {
   return "Something went wrong. Please try again.";
 }
 
+function formatDuration(seconds, style = "long") {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (minutes === 0) {
+    return style === "short"
+      ? `${seconds} sec`
+      : `${seconds} second${seconds === 1 ? "" : "s"}`;
+  }
+
+  if (remainingSeconds === 0) {
+    return style === "short"
+      ? `${minutes} min`
+      : `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+
+  return style === "short"
+    ? `${minutes}m ${remainingSeconds}s`
+    : `${minutes} min ${remainingSeconds} sec`;
+}
+
+function getDurationSeconds(minutesValue, secondsValue) {
+  const minutes = minutesValue === "" ? 0 : Number(minutesValue);
+  const seconds = secondsValue === "" ? 0 : Number(secondsValue);
+  const durationSeconds = minutes * 60 + seconds;
+
+  if (
+    !Number.isInteger(minutes) ||
+    !Number.isInteger(seconds) ||
+    minutes < 0 ||
+    seconds < 0 ||
+    seconds > MAX_SECONDS_FIELD ||
+    !Number.isInteger(durationSeconds) ||
+    durationSeconds < MIN_ROUND_SECONDS ||
+    durationSeconds > MAX_ROUND_SECONDS
+  ) {
+    return null;
+  }
+  return durationSeconds;
+}
+
 function SetupForm({ onCreate }) {
   const [hostName, setHostName] = useState("");
   const [language, setLanguage] = useState("Russian");
   const [categories, setCategories] = useState(INITIAL_CATEGORIES);
-  const [durationSeconds, setDurationSeconds] = useState(60);
+  const [durationMinutes, setDurationMinutes] = useState("1");
+  const [durationSeconds, setDurationSeconds] = useState("0");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const categoryListRef = useRef(null);
+  const [hasHiddenCategories, setHasHiddenCategories] = useState(false);
+
+  const updateCategoryScrollCue = () => {
+    const list = categoryListRef.current;
+    if (!list) return;
+
+    const overflows = list.scrollHeight > list.clientHeight + 1;
+    const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 1;
+    setHasHiddenCategories(overflows && !atBottom);
+  };
+
+  useEffect(() => {
+    updateCategoryScrollCue();
+    window.addEventListener("resize", updateCategoryScrollCue);
+    return () => window.removeEventListener("resize", updateCategoryScrollCue);
+  }, [categories.length]);
 
   const updateCategory = (index, value) => {
     setCategories((current) =>
@@ -89,7 +151,7 @@ function SetupForm({ onCreate }) {
   };
 
   const addCategory = () => {
-    if (categories.length < 8) setCategories((current) => [...current, ""]);
+    setCategories((current) => [...current, ""]);
   };
 
   const removeCategory = (index) => {
@@ -105,12 +167,22 @@ function SetupForm({ onCreate }) {
     setSubmitting(true);
     setError("");
 
+    const roundDurationSeconds = getDurationSeconds(
+      durationMinutes,
+      durationSeconds,
+    );
+    if (!roundDurationSeconds) {
+      setError("Choose a round time from 5 seconds up to 60 minutes.");
+      setSubmitting(false);
+      return;
+    }
+
     try {
       await onCreate({
         hostName,
         language,
         categories,
-        durationSeconds,
+        durationSeconds: roundDurationSeconds,
       });
     } catch (submitError) {
       setError(getErrorMessage(submitError));
@@ -143,33 +215,38 @@ function SetupForm({ onCreate }) {
 
       <div className="field">
         <span>Categories</span>
-        <div className="category-list">
-          {categories.map((category, index) => (
-            <div className="category-row" key={index}>
-              <span className="category-number">
-                {String(index + 1).padStart(2, "0")}
-              </span>
-              <input
-                aria-label={`Category ${index + 1}`}
-                onChange={(event) => updateCategory(index, event.target.value)}
-                required
-                value={category}
-              />
-              <button
-                aria-label={`Remove category ${index + 1}`}
-                className="icon-button"
-                disabled={categories.length <= 2}
-                onClick={() => removeCategory(index)}
-                type="button"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+        <div className={`category-list-frame ${hasHiddenCategories ? "has-more" : ""}`}>
+          <div
+            className="category-list"
+            onScroll={updateCategoryScrollCue}
+            ref={categoryListRef}
+          >
+            {categories.map((category, index) => (
+              <div className="category-row" key={index}>
+                <span className="category-number">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <input
+                  aria-label={`Category ${index + 1}`}
+                  onChange={(event) => updateCategory(index, event.target.value)}
+                  required
+                  value={category}
+                />
+                <button
+                  aria-label={`Remove category ${index + 1}`}
+                  className="icon-button"
+                  disabled={categories.length <= 2}
+                  onClick={() => removeCategory(index)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
         <button
           className="text-button"
-          disabled={categories.length >= 8}
           onClick={addCategory}
           type="button"
         >
@@ -179,17 +256,33 @@ function SetupForm({ onCreate }) {
 
       <div className="field">
         <span>Round time</span>
-        <div className="segmented">
-          {[15, 60, 120].map((seconds) => (
-            <button
-              className={durationSeconds === seconds ? "active" : ""}
-              key={seconds}
-              onClick={() => setDurationSeconds(seconds)}
-              type="button"
-            >
-              {seconds === 15 ? "15 sec demo" : `${seconds / 60} min`}
-            </button>
-          ))}
+        <div className="duration-inputs">
+          <label className="duration-part">
+            <span>Minutes</span>
+            <input
+              aria-label="Round time minutes"
+              inputMode="numeric"
+              max={Math.floor(MAX_ROUND_SECONDS / 60)}
+              min={0}
+              onChange={(event) => setDurationMinutes(event.target.value)}
+              step={1}
+              type="number"
+              value={durationMinutes}
+            />
+          </label>
+          <label className="duration-part">
+            <span>Seconds</span>
+            <input
+              aria-label="Round time seconds"
+              inputMode="numeric"
+              max={MAX_SECONDS_FIELD}
+              min={0}
+              onChange={(event) => setDurationSeconds(event.target.value)}
+              step={5}
+              type="number"
+              value={durationSeconds}
+            />
+          </label>
         </div>
       </div>
 
@@ -225,9 +318,7 @@ function JoinRoom({ room, onJoin, onLeave }) {
       <h1>Join room {room.code}</h1>
       <p>
         {room.language} · {room.categories.length} categories ·{" "}
-        {room.durationSeconds < 60
-          ? `${room.durationSeconds} seconds`
-          : `${room.durationSeconds / 60} minute${room.durationSeconds === 60 ? "" : "s"}`}
+        {formatDuration(room.durationSeconds)}
       </p>
       <label className="field">
         <span>Your name</span>
@@ -279,11 +370,7 @@ function Lobby({
       <div className="room-summary">
         <span>{room.language}</span>
         <span>{room.categories.length} categories</span>
-        <span>
-          {room.durationSeconds < 60
-            ? `${room.durationSeconds} sec`
-            : `${room.durationSeconds / 60} min`}
-        </span>
+        <span>{formatDuration(room.durationSeconds, "short")}</span>
       </div>
 
       <div className="players-list">
@@ -449,7 +536,7 @@ function RevealRound({
         {room.categories.map((category, index) => (
           <span
             className={index <= room.reveal.categoryIndex ? "seen" : ""}
-            key={category}
+            key={`${category}-${index}`}
           />
         ))}
       </div>
