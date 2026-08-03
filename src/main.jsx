@@ -7,6 +7,7 @@ import {
 } from "convex/react";
 import { createRoot } from "react-dom/client";
 import { api } from "../convex/_generated/api";
+import { PlayerArena } from "./PlayerArena";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -457,12 +458,17 @@ function useSecondsLeft(roundEndsAt) {
 
 function PlayingRound({ room, onSaveAnswer }) {
   const [answers, setAnswers] = useState(room.viewerAnswers);
+  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [saveError, setSaveError] = useState("");
   const secondsLeft = useSecondsLeft(room.roundEndsAt);
   const answerCount = answers.filter((answer) => answer.trim()).length;
+  const activeAnswer = answers[activeCategoryIndex] ?? "";
+  const activeCategory = room.categories[activeCategoryIndex];
+  const isLastCategory = activeCategoryIndex === room.categories.length - 1;
 
   useEffect(() => {
     setAnswers(room.viewerAnswers);
+    setActiveCategoryIndex(0);
   }, [room.roundNumber]);
 
   const updateAnswer = (categoryIndex, value) => {
@@ -475,45 +481,122 @@ function PlayingRound({ room, onSaveAnswer }) {
     });
   };
 
-  return (
-    <div className="playing-content">
-      <div className="round-focus">
-        <span className="eyebrow">
-          Round {room.roundNumber} · {room.language}
-        </span>
-        <div className="letter-display">{room.letter}</div>
-        <span className={`timer ${secondsLeft <= 10 ? "urgent" : ""}`}>
-          {Math.floor(secondsLeft / 60)}:
-          {String(secondsLeft % 60).padStart(2, "0")}
-        </span>
-        <p>Every answer must begin with this letter.</p>
-      </div>
+  const clearActiveAnswer = () => {
+    updateAnswer(activeCategoryIndex, "");
+  };
 
-      <div className="answer-sheet">
-        <div className="section-heading">
-          <span>Your answers</span>
-          <span>
-            {answerCount}/{room.categories.length}
-          </span>
+  const advanceCategory = () => {
+    if (isLastCategory) {
+      const firstEmptyCategory = answers.findIndex((answer) => !answer.trim());
+      setActiveCategoryIndex(firstEmptyCategory === -1 ? 0 : firstEmptyCategory);
+      return;
+    }
+    setActiveCategoryIndex((current) => current + 1);
+  };
+
+  return (
+    <div className="playing-content arena-round">
+      <div className="arena-stage">
+        <PlayerArena
+          letter={room.letter}
+          players={room.players}
+          viewerId={room.viewer.id}
+        />
+
+        <div className="arena-hud">
+          <div>
+            <span className="eyebrow">Round {room.roundNumber}</span>
+            <strong>{room.language}</strong>
+          </div>
+          <div className="arena-progress-count">
+            <span>Words locked in</span>
+            <strong>
+              {answerCount}/{room.categories.length}
+            </strong>
+          </div>
+          <div className={`arena-clock ${secondsLeft <= 10 ? "urgent" : ""}`}>
+            <span>Time left</span>
+            <strong>
+              {Math.floor(secondsLeft / 60)}:
+              {String(secondsLeft % 60).padStart(2, "0")}
+            </strong>
+          </div>
         </div>
-        {room.categories.map((category, index) => (
-          <label className="answer-row" key={`${room.roundNumber}-${index}`}>
-            <span className="answer-index">{index + 1}</span>
-            <span className="answer-category">{category}</span>
+
+        <section
+          aria-labelledby="active-category"
+          className="answer-command-board"
+        >
+          <div className="answer-board-heading">
+            <span>
+              Category {activeCategoryIndex + 1} / {room.categories.length}
+            </span>
+            <strong id="active-category">{activeCategory}</strong>
+          </div>
+          <div className="answer-board-control">
+            <span className="answer-letter-cue">{room.letter}</span>
             <input
-              autoFocus={index === 0}
+              autoFocus
               disabled={secondsLeft === 0}
+              key={`${room.roundNumber}-${activeCategoryIndex}`}
               maxLength={120}
-              onChange={(event) => updateAnswer(index, event.target.value)}
-              placeholder={`${room.letter}…`}
-              value={answers[index] ?? ""}
+              onChange={(event) =>
+                updateAnswer(activeCategoryIndex, event.target.value)
+              }
+              placeholder={`Type a word beginning with ${room.letter}…`}
+              value={activeAnswer}
             />
-          </label>
-        ))}
-        {saveError && <p className="error-message">{saveError}</p>}
-        <p className="microcopy">
-          Answers save automatically. The server locks them when time expires.
-        </p>
+            <button
+              aria-label={`Clear answer for ${activeCategory}`}
+              className="answer-reject"
+              disabled={secondsLeft === 0 || !activeAnswer}
+              onClick={clearActiveAnswer}
+              type="button"
+            >
+              ×
+            </button>
+            <button
+              aria-label={
+                isLastCategory
+                  ? "Review unanswered categories"
+                  : "Go to next category"
+              }
+              className="answer-confirm"
+              disabled={secondsLeft === 0}
+              onClick={advanceCategory}
+              type="button"
+            >
+              ✓
+            </button>
+          </div>
+          <div className="answer-category-tabs" aria-label="Answer categories">
+            {room.categories.map((category, index) => (
+              <button
+                aria-label={`${category}: ${
+                  answers[index]?.trim() ? "answered" : "unanswered"
+                }`}
+                className={[
+                  index === activeCategoryIndex ? "active" : "",
+                  answers[index]?.trim() ? "answered" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={`${category}-${index}`}
+                onClick={() => setActiveCategoryIndex(index)}
+                type="button"
+              >
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <strong>{category}</strong>
+              </button>
+            ))}
+          </div>
+          {saveError && <p className="error-message">{saveError}</p>}
+        </section>
+
+        <div className="arena-help">
+          <span className="arena-live-dot" />
+          Answers save live · Every word starts with {room.letter}
+        </div>
       </div>
     </div>
   );
@@ -659,8 +742,19 @@ function Results({ room, error, onReturnToLobby, returning }) {
             key={standing.playerId}
           >
             <span className="rank">{String(index + 1).padStart(2, "0")}</span>
-            <div className="avatar">
-              {standing.name.slice(0, 1).toUpperCase()}
+            <div className="score-avatar">
+              {standing.isWinner && (
+                <span
+                  aria-label={`${standing.name} is a winner`}
+                  className="winner-crown"
+                  role="img"
+                >
+                  👑
+                </span>
+              )}
+              <div className="avatar">
+                {standing.name.slice(0, 1).toUpperCase()}
+              </div>
             </div>
             <strong>{standing.name}</strong>
             <span className="round-score">
@@ -808,6 +902,7 @@ function HowToPlay({ onClose }) {
 function GameShell({
   stageNumber,
   children,
+  immersive = false,
   leaving = false,
   onLeaveRoom,
   showIntro = false,
@@ -842,7 +937,7 @@ function GameShell({
         <HowToPlay onClose={() => setShowHowToPlay(false)} />
       )}
 
-      <div className="party-shell">
+      <div className={`party-shell ${immersive ? "is-immersive" : ""}`}>
         <aside className="stage-rail" aria-label="Game progress">
           {["Room", "Lobby", "Play", "Reveal", "Results"].map((label, index) => (
             <div
@@ -1068,6 +1163,7 @@ function RoomApp() {
   if (room.status === "playing") {
     return (
       <GameShell
+        immersive
         leaving={leaving}
         onLeaveRoom={handleLeaveRoom}
         stageNumber={3}
