@@ -39,4 +39,13 @@ describe("getArenaLayout", () => {
     expect(layout[0].position.z).toBeGreaterThan(0);
     expect(layout[0].isViewer).toBe(true);
   });
+
+  it("orders seats clockwise from the viewer's near position", () => {
+    const layout = getArenaLayout(makePlayers(4), "player-1");
+
+    expect(layout[0].position.z).toBeGreaterThan(0);
+    expect(layout[1].position.x).toBeLessThan(0);
+    expect(layout[2].position.z).toBeLessThan(0);
+    expect(layout[3].position.x).toBeGreaterThan(0);
+  });
 });

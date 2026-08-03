@@ -22,12 +22,29 @@ function roundedRectangle(context, x, y, width, height, radius) {
   context.closePath();
 }
 
-function makeLabelSprite(player, color) {
+function makeLabelSprite(
+  player,
+  color,
+  { focused = false, mode = "play", standing = null, winner = false } = {},
+) {
   const canvas = document.createElement("canvas");
   canvas.width = 768;
   canvas.height = 192;
   const context = canvas.getContext("2d");
-  const status = player.online ? (player.isViewer ? "YOU" : "IN ROUND") : "OFFLINE";
+  const status =
+    mode === "results" && standing
+      ? `${winner ? "WINNER  ·  " : ""}${standing.roundScore} ${
+          standing.roundScore === 1 ? "WORD" : "WORDS"
+        }  ·  ${standing.points} PT${standing.points === 1 ? "" : "S"}`
+      : mode === "reveal"
+        ? focused
+          ? "VOTING NOW"
+          : "WAITING"
+        : player.online
+          ? player.isViewer
+            ? "YOU"
+            : "IN ROUND"
+          : "OFFLINE";
 
   context.clearRect(0, 0, canvas.width, canvas.height);
   roundedRectangle(context, 8, 8, 752, 176, 48);
@@ -65,7 +82,7 @@ function makeLabelSprite(player, color) {
   });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(3.2, 0.8, 1);
-  sprite.position.y = 3.22;
+  sprite.position.y = winner ? 3.7 : 3.22;
   return sprite;
 }
 
@@ -123,7 +140,62 @@ function addLimb(group, material, start, end, radius = 0.13) {
   group.add(limb);
 }
 
-function makePlayerModel(player, index) {
+function makeCrown() {
+  const crown = new THREE.Group();
+  const goldMaterial = new THREE.MeshStandardMaterial({
+    color: "#ffd44f",
+    emissive: "#8b5200",
+    emissiveIntensity: 0.28,
+    metalness: 0.72,
+    roughness: 0.24,
+  });
+  const jewelMaterial = new THREE.MeshStandardMaterial({
+    color: "#ff755f",
+    emissive: "#a01818",
+    emissiveIntensity: 0.35,
+    metalness: 0.25,
+    roughness: 0.3,
+  });
+
+  const band = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.34, 0.38, 0.19, 32, 1, false),
+    goldMaterial,
+  );
+  band.position.y = 0.05;
+  band.castShadow = true;
+  crown.add(band);
+
+  for (let index = 0; index < 5; index += 1) {
+    const angle = (index / 5) * Math.PI * 2;
+    const spike = new THREE.Mesh(
+      new THREE.ConeGeometry(0.115, 0.48, 10),
+      goldMaterial,
+    );
+    spike.position.set(
+      Math.cos(angle) * 0.27,
+      0.34,
+      Math.sin(angle) * 0.27,
+    );
+    spike.castShadow = true;
+    crown.add(spike);
+  }
+
+  const jewel = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.09, 0),
+    jewelMaterial,
+  );
+  jewel.position.set(0, 0.08, 0.36);
+  crown.add(jewel);
+  crown.position.y = 2.78;
+  crown.rotation.y = Math.PI / 5;
+  return crown;
+}
+
+function makePlayerModel(
+  player,
+  index,
+  { focused = false, mode = "play", standing = null, winner = false } = {},
+) {
   const color = getPlayerColor(player, index);
   const playerGroup = new THREE.Group();
   const model = new THREE.Group();
@@ -180,14 +252,42 @@ function makePlayerModel(player, index) {
     model.add(eye);
   }
 
-  if (!player.online) {
+  if (!player.online && mode !== "results") {
     bodyMaterial.transparent = true;
     bodyMaterial.opacity = 0.32;
   }
 
+  if (winner) {
+    model.add(makeCrown());
+  }
+
+  if (focused) {
+    const focusRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.82, 1.02, 48),
+      new THREE.MeshBasicMaterial({
+        color: "#dfff57",
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide,
+      }),
+    );
+    focusRing.rotation.x = -Math.PI / 2;
+    focusRing.position.y = 0.045;
+    playerGroup.add(focusRing);
+    playerGroup.userData.focusRing = focusRing;
+  }
+
   playerGroup.add(model);
-  playerGroup.add(makeLabelSprite(player, color));
+  playerGroup.add(
+    makeLabelSprite(player, color, {
+      focused,
+      mode,
+      standing,
+      winner,
+    }),
+  );
   playerGroup.userData.model = model;
+  playerGroup.userData.focused = focused;
   playerGroup.userData.phase = index * 0.78;
   playerGroup.userData.baseY = 0;
   return playerGroup;
@@ -287,13 +387,26 @@ function disposeScene(scene) {
   });
 }
 
-export function PlayerArena({ letter, players, viewerId }) {
+export function PlayerArena({
+  focusedPlayerId = null,
+  letter,
+  mode = "play",
+  players,
+  standings = [],
+  viewerId,
+}) {
   const hostRef = useRef(null);
   const [renderError, setRenderError] = useState(false);
   const playerSignature = players
     .map(
       (player) =>
         `${player.id}:${player.name}:${player.online}:${player.isHost}:${player.points}`,
+    )
+    .join("|");
+  const standingsSignature = standings
+    .map(
+      (standing) =>
+        `${standing.playerId}:${standing.roundScore}:${standing.points}:${standing.isWinner}`,
     )
     .join("|");
 
@@ -357,7 +470,15 @@ export function PlayerArena({ letter, players, viewerId }) {
     scene.add(letterSprite);
 
     const characterGroups = layout.map((player, index) => {
-      const character = makePlayerModel(player, index);
+      const standing = standings.find(
+        (candidate) => candidate.playerId === player.id,
+      );
+      const character = makePlayerModel(player, index, {
+        focused: player.id === focusedPlayerId,
+        mode,
+        standing,
+        winner: standing?.isWinner ?? false,
+      });
       character.position.set(player.position.x, 0, player.position.z);
       const directionToCenter = new THREE.Vector3(
         -player.position.x,
@@ -368,6 +489,21 @@ export function PlayerArena({ letter, players, viewerId }) {
       scene.add(character);
       return character;
     });
+
+    if (focusedPlayerId) {
+      const focusedPlayer = layout.find(
+        (player) => player.id === focusedPlayerId,
+      );
+      if (focusedPlayer) {
+        const focusLight = new THREE.PointLight("#dfff57", 20, 10, 1.8);
+        focusLight.position.set(
+          focusedPlayer.position.x,
+          4.5,
+          focusedPlayer.position.z,
+        );
+        scene.add(focusLight);
+      }
+    }
 
     let pointerX = 0;
     let pointerY = 0;
@@ -400,10 +536,16 @@ export function PlayerArena({ letter, players, viewerId }) {
       const elapsed = (timestamp - animationStartedAt) / 1000;
       if (!reduceMotion) {
         characterGroups.forEach((character) => {
-          const bob = Math.sin(elapsed * 1.45 + character.userData.phase) * 0.035;
+          const bobAmount = character.userData.focused ? 0.075 : 0.035;
+          const bob =
+            Math.sin(elapsed * 1.45 + character.userData.phase) * bobAmount;
           character.position.y = character.userData.baseY + bob;
           character.userData.model.rotation.z =
             Math.sin(elapsed * 1.15 + character.userData.phase) * 0.018;
+          if (character.userData.focusRing) {
+            const pulse = 1 + Math.sin(elapsed * 3) * 0.08;
+            character.userData.focusRing.scale.setScalar(pulse);
+          }
         });
         letterSprite.position.y = 2.95 + Math.sin(elapsed * 1.8) * 0.1;
         beaconRing.scale.setScalar(1 + Math.sin(elapsed * 2.1) * 0.035);
@@ -427,7 +569,14 @@ export function PlayerArena({ letter, players, viewerId }) {
       renderer.forceContextLoss();
       renderer.domElement.remove();
     };
-  }, [letter, playerSignature, viewerId]);
+  }, [
+    focusedPlayerId,
+    letter,
+    mode,
+    playerSignature,
+    standingsSignature,
+    viewerId,
+  ]);
 
   return (
     <div className="player-arena-canvas" ref={hostRef}>
