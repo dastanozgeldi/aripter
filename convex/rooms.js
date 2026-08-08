@@ -101,6 +101,22 @@ function getRoundPlayers(players, roundNumber) {
   return participants.length > 0 ? participants : players;
 }
 
+function getLetterHistory(room) {
+  if (room.letterHistory) return room.letterHistory;
+  return room.letter ? [room.letter] : [];
+}
+
+function getUnusedLetters(room) {
+  const letters = LETTERS_BY_LANGUAGE[room.language];
+  if (!letters) throw new ConvexError("Unsupported room language.");
+  const usedLetters = new Set(getLetterHistory(room));
+  return letters.filter((letter) => !usedLetters.has(letter));
+}
+
+function pickRandomLetter(letters) {
+  return letters[Math.floor(Math.random() * letters.length)];
+}
+
 function isAnswerVotingComplete(players, answer, votes) {
   if (!answer.value.trim()) return true;
 
@@ -156,6 +172,7 @@ export const create = mutation({
       categories,
       durationSeconds,
       hostToken: args.hostToken,
+      letterHistory: [],
       expiresAt,
     });
 
@@ -449,11 +466,13 @@ export const startRound = mutation({
       throw new ConvexError("Every player must be ready.");
     }
 
-    const letters = LETTERS_BY_LANGUAGE[room.language];
-    if (!letters) throw new ConvexError("Unsupported room language.");
+    const letters = getUnusedLetters(room);
+    if (letters.length === 0) {
+      throw new ConvexError("Every letter in this room has already been played.");
+    }
 
     const roundNumber = (room.roundNumber ?? 0) + 1;
-    const letter = letters[Math.floor(Math.random() * letters.length)];
+    const letter = pickRandomLetter(letters);
     const roundEndsAt = Date.now() + room.durationSeconds * 1000;
 
     for (const player of connectedPlayers) {
@@ -463,7 +482,10 @@ export const startRound = mutation({
       status: "playing",
       roundNumber,
       letter,
+      letterHistory: [...getLetterHistory(room), letter],
       roundEndsAt,
+      skipVoteRoundNumber: undefined,
+      skipVotes: undefined,
     });
     await ctx.scheduler.runAt(roundEndsAt, internal.rooms.finishRound, {
       roomId: room._id,
@@ -471,6 +493,135 @@ export const startRound = mutation({
     });
 
     return { letter, roundEndsAt, roundNumber };
+  },
+});
+
+export const initiateSkipVote = mutation({
+  args: {
+    code: v.string(),
+    hostToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+
+    if (!room) throw new ConvexError("Room not found.");
+    if (room.hostToken !== args.hostToken) {
+      throw new ConvexError("Only the host can start a skip vote.");
+    }
+    if (room.status !== "playing" || !room.roundNumber) {
+      throw new ConvexError("Skip voting is only available during a round.");
+    }
+    if (room.skipVoteRoundNumber === room.roundNumber) {
+      throw new ConvexError("A skip vote is already open.");
+    }
+    if (getUnusedLetters(room).length === 0) {
+      throw new ConvexError("There are no unused letters left for a replacement round.");
+    }
+
+    const storedPlayers = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    const connectedPlayers = getRoundPlayers(storedPlayers, room.roundNumber)
+      .filter((player) => player.online !== false);
+    if (connectedPlayers.length < 2) {
+      throw new ConvexError("At least two connected players are needed for a skip vote.");
+    }
+
+    await ctx.db.patch(room._id, {
+      skipVoteRoundNumber: room.roundNumber,
+      skipVotes: [],
+    });
+  },
+});
+
+export const voteToSkip = mutation({
+  args: {
+    code: v.string(),
+    playerToken: v.string(),
+    skip: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+
+    if (!room) throw new ConvexError("Room not found.");
+    if (
+      room.status !== "playing" ||
+      !room.roundNumber ||
+      room.skipVoteRoundNumber !== room.roundNumber
+    ) {
+      throw new ConvexError("There is no open skip vote.");
+    }
+
+    const storedPlayers = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    const roundPlayers = getRoundPlayers(storedPlayers, room.roundNumber);
+    const connectedPlayers = roundPlayers.filter(
+      (player) => player.online !== false,
+    );
+    const voter = connectedPlayers.find(
+      (player) => player.token === args.playerToken,
+    );
+    if (!voter) throw new ConvexError("You are not voting in this round.");
+
+    const votes = (room.skipVotes ?? []).filter(
+      (vote) => vote.playerId !== voter._id,
+    );
+    votes.push({ playerId: voter._id, skip: args.skip });
+
+    const connectedIds = new Set(connectedPlayers.map((player) => player._id));
+    const connectedVotes = votes.filter((vote) => connectedIds.has(vote.playerId));
+    const yesVotes = connectedVotes.filter((vote) => vote.skip).length;
+    const noVotes = connectedVotes.length - yesVotes;
+    const requiredYesVotes = Math.floor(connectedPlayers.length / 2) + 1;
+
+    if (yesVotes >= requiredYesVotes) {
+      const letters = getUnusedLetters(room);
+      if (letters.length === 0) {
+        throw new ConvexError("There are no unused letters left for a replacement round.");
+      }
+
+      const roundNumber = room.roundNumber + 1;
+      const letter = pickRandomLetter(letters);
+      const roundEndsAt = Date.now() + room.durationSeconds * 1000;
+      for (const player of roundPlayers) {
+        await ctx.db.patch(player._id, { activeRoundNumber: roundNumber });
+      }
+      await ctx.db.patch(room._id, {
+        roundNumber,
+        letter,
+        letterHistory: [...getLetterHistory(room), letter],
+        roundEndsAt,
+        skipVoteRoundNumber: undefined,
+        skipVotes: undefined,
+      });
+      await ctx.scheduler.runAt(roundEndsAt, internal.rooms.finishRound, {
+        roomId: room._id,
+        roundNumber,
+      });
+      return;
+    }
+
+    const rejectionVotesNeeded = connectedPlayers.length - requiredYesVotes + 1;
+    if (noVotes >= rejectionVotesNeeded) {
+      await ctx.db.patch(room._id, {
+        skipVoteRoundNumber: undefined,
+        skipVotes: undefined,
+      });
+      return;
+    }
+
+    await ctx.db.patch(room._id, { skipVotes: votes });
   },
 });
 
@@ -820,6 +971,8 @@ export const get = query({
       online: player.online ?? false,
     }));
     const viewer = players.find((player) => player.token === args.playerToken);
+    const letterHistory = getLetterHistory(room);
+    const totalLetters = LETTERS_BY_LANGUAGE[room.language]?.length ?? 0;
     const viewerAnswers = Array.from(
       { length: room.categories.length },
       () => "",
@@ -909,6 +1062,29 @@ export const get = query({
       };
     }
 
+    let skipVote = null;
+    if (
+      room.status === "playing" &&
+      room.roundNumber &&
+      room.skipVoteRoundNumber === room.roundNumber
+    ) {
+      const connectedPlayers = roundPlayers.filter(
+        (player) => player.online !== false,
+      );
+      const connectedIds = new Set(connectedPlayers.map((player) => player._id));
+      const skipVotes = (room.skipVotes ?? []).filter((vote) =>
+        connectedIds.has(vote.playerId),
+      );
+      skipVote = {
+        votesCast: skipVotes.length,
+        playerCount: connectedPlayers.length,
+        yesVotes: skipVotes.filter((vote) => vote.skip).length,
+        requiredYesVotes: Math.floor(connectedPlayers.length / 2) + 1,
+        viewerVote:
+          skipVotes.find((vote) => vote.playerId === viewer?._id)?.skip ?? null,
+      };
+    }
+
     let results = null;
     if (room.status === "results" && room.roundNumber) {
       const answers = await ctx.db
@@ -969,7 +1145,11 @@ export const get = query({
       durationSeconds: room.durationSeconds,
       roundNumber: room.roundNumber ?? 0,
       letter: room.letter ?? null,
+      letterHistory,
+      remainingLetters: Math.max(0, totalLetters - letterHistory.length),
+      totalLetters,
       roundEndsAt: room.roundEndsAt ?? null,
+      skipVote,
       revealIndex: room.revealIndex ?? 0,
       viewerAnswers,
       reveal,

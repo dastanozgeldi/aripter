@@ -343,6 +343,21 @@ function JoinRoom({ room, onJoin, onLeave }) {
   );
 }
 
+function LetterHistory({ letters }) {
+  if (letters.length === 0) return null;
+
+  return (
+    <div className="letter-history">
+      <span className="eyebrow">Letters played</span>
+      <div>
+        {letters.map((letter, index) => (
+          <span key={`${letter}-${index}`}>{letter}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Lobby({
   room,
   copied,
@@ -371,7 +386,11 @@ function Lobby({
         <span>{room.language}</span>
         <span>{room.categories.length} categories</span>
         <span>{formatDuration(room.durationSeconds, "short")}</span>
+        <span>
+          {room.remainingLetters}/{room.totalLetters} letters left
+        </span>
       </div>
+      <LetterHistory letters={room.letterHistory} />
 
       <div className="players-list">
         <div className="section-heading">
@@ -423,16 +442,22 @@ function Lobby({
       {room.viewer.isHost && (
         <button
           className="primary-button"
-          disabled={!allReady || starting}
+          disabled={!allReady || starting || room.remainingLetters === 0}
           onClick={onStartRound}
         >
-          {starting ? "Starting..." : "Start round"}
+          {room.remainingLetters === 0
+            ? "All letters played"
+            : starting
+              ? "Starting..."
+              : "Start round"}
         </button>
       )}
 
       {startError && <p className="error-message">{startError}</p>}
       <p className="microcopy">
-        {allReady
+        {room.remainingLetters === 0
+          ? "This room has played every letter in its alphabet."
+          : allReady
           ? room.viewer.isHost
             ? "Everyone is ready. Start when you are."
             : "Everyone is ready. Waiting for the host."
@@ -455,7 +480,67 @@ function useSecondsLeft(roundEndsAt) {
   return Math.max(0, Math.ceil((roundEndsAt - now) / 1000));
 }
 
-function PlayingRound({ room, onSaveAnswer }) {
+function SkipVoteDialog({ error, onVote, room, voting }) {
+  const hasVoted = room.skipVote.viewerVote !== null;
+
+  return (
+    <div className="skip-vote-backdrop">
+      <section
+        aria-labelledby="skip-vote-title"
+        aria-modal="true"
+        className="skip-vote-panel"
+        role="dialog"
+      >
+        <span className="eyebrow">Room vote</span>
+        <h2 id="skip-vote-title">Skip the letter {room.letter}?</h2>
+        <p>
+          A majority vote will discard this round and immediately start a new
+          timer with an unused letter.
+        </p>
+        <div className="skip-vote-count">
+          <strong>
+            {room.skipVote.yesVotes}/{room.skipVote.requiredYesVotes}
+          </strong>
+          <span>skip votes needed</span>
+        </div>
+        {hasVoted ? (
+          <p className="skip-vote-waiting">
+            Vote cast: {room.skipVote.viewerVote ? "skip it" : "keep it"}. Waiting
+            for the room ({room.skipVote.votesCast}/{room.skipVote.playerCount}).
+          </p>
+        ) : (
+          <div className="skip-vote-actions">
+            <button
+              className="secondary-button"
+              disabled={voting}
+              onClick={() => onVote(false)}
+            >
+              Keep this letter
+            </button>
+            <button
+              className="primary-button"
+              disabled={voting}
+              onClick={() => onVote(true)}
+            >
+              {voting ? "Casting vote..." : "Skip this round"}
+            </button>
+          </div>
+        )}
+        {error && <p className="error-message">{error}</p>}
+      </section>
+    </div>
+  );
+}
+
+function PlayingRound({
+  initiatingSkip,
+  onInitiateSkip,
+  onSaveAnswer,
+  onSkipVote,
+  room,
+  skipError,
+  votingToSkip,
+}) {
   const [answers, setAnswers] = useState(room.viewerAnswers);
   const [saveError, setSaveError] = useState("");
   const secondsLeft = useSecondsLeft(room.roundEndsAt);
@@ -487,6 +572,30 @@ function PlayingRound({ room, onSaveAnswer }) {
           {String(secondsLeft % 60).padStart(2, "0")}
         </span>
         <p>Every answer must begin with this letter.</p>
+        <span className="letters-remaining">
+          {room.remainingLetters} unused {room.remainingLetters === 1 ? "letter" : "letters"}
+          {" "}remain
+        </span>
+        {room.viewer.isHost && (
+          <button
+            className="secondary-button request-skip-button"
+            disabled={
+              initiatingSkip ||
+              Boolean(room.skipVote) ||
+              room.remainingLetters === 0
+            }
+            onClick={onInitiateSkip}
+          >
+            {room.remainingLetters === 0
+              ? "No replacement letters left"
+              : initiatingSkip
+                ? "Opening vote..."
+                : "Ask to skip this letter"}
+          </button>
+        )}
+        {!room.skipVote && skipError && (
+          <p className="error-message round-error">{skipError}</p>
+        )}
       </div>
 
       <div className="answer-sheet">
@@ -515,6 +624,14 @@ function PlayingRound({ room, onSaveAnswer }) {
           Answers save automatically. The server locks them when time expires.
         </p>
       </div>
+      {room.skipVote && (
+        <SkipVoteDialog
+          error={skipError}
+          onVote={onSkipVote}
+          room={room}
+          voting={votingToSkip}
+        />
+      )}
     </div>
   );
 }
@@ -673,17 +790,24 @@ function Results({ room, error, onReturnToLobby, returning }) {
           </div>
         ))}
       </div>
+      <LetterHistory letters={room.letterHistory} />
       {room.viewer.isHost ? (
         <button
           className="primary-button"
-          disabled={returning}
+          disabled={returning || room.remainingLetters === 0}
           onClick={onReturnToLobby}
         >
-          {returning ? "Opening lobby..." : "Play another round"}
+          {room.remainingLetters === 0
+            ? "Room complete · all letters played"
+            : returning
+              ? "Opening lobby..."
+              : "Play another round"}
         </button>
       ) : (
         <p className="microcopy">
-          Waiting for the host to open the next round.
+          {room.remainingLetters === 0
+            ? "This room has played every letter in its alphabet."
+            : "Waiting for the host to open the next round."}
         </p>
       )}
       {error && <p className="error-message">{error}</p>}
@@ -895,6 +1019,9 @@ function RoomApp() {
   const [votingAnswerId, setVotingAnswerId] = useState("");
   const [returnError, setReturnError] = useState("");
   const [returning, setReturning] = useState(false);
+  const [skipError, setSkipError] = useState("");
+  const [initiatingSkip, setInitiatingSkip] = useState(false);
+  const [votingToSkip, setVotingToSkip] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const createRoom = useMutation(api.rooms.create);
   const joinRoom = useMutation(api.rooms.join);
@@ -902,6 +1029,8 @@ function RoomApp() {
   const leaveRoom = useMutation(api.rooms.leave);
   const setReady = useMutation(api.rooms.setReady);
   const startRound = useMutation(api.rooms.startRound);
+  const initiateSkipVote = useMutation(api.rooms.initiateSkipVote);
+  const voteToSkip = useMutation(api.rooms.voteToSkip);
   const saveAnswer = useMutation(api.rooms.saveAnswer);
   const voteAnswer = useMutation(api.rooms.voteAnswer);
   const advanceReveal = useMutation(api.rooms.advanceReveal);
@@ -914,9 +1043,12 @@ function RoomApp() {
   useEffect(() => {
     if (!room) return;
     setAdvancingReveal(false);
+    setInitiatingSkip(false);
+    setVotingToSkip(false);
+    if (!room.skipVote) setSkipError("");
     if (room.status !== "lobby") setStarting(false);
     if (room.status === "lobby") setReturning(false);
-  }, [room?.status, room?.revealIndex]);
+  }, [room?.status, room?.roundNumber, room?.revealIndex, room?.skipVote]);
 
   useEffect(() => {
     if (!roomCode || !room?.viewer) return undefined;
@@ -980,6 +1112,28 @@ function RoomApp() {
     } catch (error) {
       setRevealError(getErrorMessage(error));
       setAdvancingReveal(false);
+    }
+  };
+
+  const handleInitiateSkip = async () => {
+    setInitiatingSkip(true);
+    setSkipError("");
+    try {
+      await initiateSkipVote({ code: roomCode, hostToken: playerToken });
+    } catch (error) {
+      setSkipError(getErrorMessage(error));
+      setInitiatingSkip(false);
+    }
+  };
+
+  const handleSkipVote = async (skip) => {
+    setVotingToSkip(true);
+    setSkipError("");
+    try {
+      await voteToSkip({ code: roomCode, playerToken, skip });
+    } catch (error) {
+      setSkipError(getErrorMessage(error));
+      setVotingToSkip(false);
     }
   };
 
@@ -1073,6 +1227,8 @@ function RoomApp() {
         stageNumber={3}
       >
         <PlayingRound
+          initiatingSkip={initiatingSkip}
+          onInitiateSkip={handleInitiateSkip}
           onSaveAnswer={(categoryIndex, value) =>
             saveAnswer({
               code: room.code,
@@ -1081,7 +1237,10 @@ function RoomApp() {
               value,
             })
           }
+          onSkipVote={handleSkipVote}
           room={room}
+          skipError={skipError}
+          votingToSkip={votingToSkip}
         />
       </GameShell>
     );

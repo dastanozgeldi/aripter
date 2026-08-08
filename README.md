@@ -36,7 +36,9 @@ The Convex room entry flow is live:
   authority transfers when needed
 - players can explicitly leave; abandoned rooms expire after 24 hours
 - only the host can start after everyone is ready
-- Convex selects the letter and owns the shared round deadline
+- Convex selects each letter without repeats and owns the shared round deadline
+- the host can open a majority vote to replace the current letter-round
+- rooms show their letter history and end after the selected alphabet is exhausted
 - answers save privately during play and lock at the deadline
 - locked answers are revealed to everyone one category at a time
 - the host advances the reveal and opens the results

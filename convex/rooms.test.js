@@ -1446,3 +1446,233 @@ test("the host can return everyone to the lobby while preserving points", async 
     { name: "Masha", ready: false, points: 1 },
   ]);
 });
+
+test("a room never picks the same letter twice", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+
+  for (let round = 0; round < 3; round += 1) {
+    for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+      await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+    }
+    await t.mutation(api.rooms.startRound, {
+      code,
+      hostToken: "host-browser-token",
+    });
+    if (round < 2) {
+      await t.run(async (ctx) => {
+        const room = await ctx.db
+          .query("rooms")
+          .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+          .unique();
+        await ctx.db.patch(room._id, { status: "results" });
+      });
+      await t.mutation(api.rooms.returnToLobby, {
+        code,
+        hostToken: "host-browser-token",
+      });
+    }
+  }
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room?.letterHistory).toEqual(["A", "B", "C"]);
+  expect(room?.remainingLetters).toBe(23);
+  expect(new Set(room?.letterHistory).size).toBe(room?.letterHistory.length);
+});
+
+test("a host skip vote appears for every player and a majority starts a new letter round", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    categoryIndex: 0,
+    value: "Alien",
+  });
+
+  await t.mutation(api.rooms.initiateSkipVote, {
+    code,
+    hostToken: "host-browser-token",
+  });
+
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    const room = await t.query(api.rooms.get, { code, playerToken });
+    expect(room?.skipVote).toMatchObject({
+      votesCast: 0,
+      playerCount: 2,
+      yesVotes: 0,
+      requiredYesVotes: 2,
+      viewerVote: null,
+    });
+  }
+
+  await t.mutation(api.rooms.voteToSkip, {
+    code,
+    playerToken: "host-browser-token",
+    skip: true,
+  });
+  const oneVoteRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(oneVoteRoom?.roundNumber).toBe(1);
+  expect(oneVoteRoom?.skipVote?.viewerVote).toBe(true);
+
+  vi.advanceTimersByTime(5_000);
+  await t.mutation(api.rooms.voteToSkip, {
+    code,
+    playerToken: "friend-browser-token",
+    skip: true,
+  });
+  const skippedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  expect(skippedRoom).toMatchObject({
+    status: "playing",
+    roundNumber: 2,
+    letter: "B",
+    letterHistory: ["A", "B"],
+    remainingLetters: 24,
+    roundEndsAt: Date.now() + 60_000,
+    skipVote: null,
+    viewerAnswers: ["", ""],
+  });
+});
+
+test("a skip vote that cannot reach a majority keeps the current round", async () => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.initiateSkipVote, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.voteToSkip, {
+    code,
+    playerToken: "friend-browser-token",
+    skip: false,
+  });
+
+  const room = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(room).toMatchObject({
+    status: "playing",
+    roundNumber: 1,
+    letter: "A",
+    letterHistory: ["A"],
+    skipVote: null,
+  });
+});
+
+test("a room cannot start or skip beyond its alphabet", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "Japanese",
+    categories: ["Place", "Food"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, {
+      status: "playing",
+      roundNumber: 10,
+      letter: "わ",
+      letterHistory: ["あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ"],
+    });
+  });
+
+  await expect(
+    t.mutation(api.rooms.initiateSkipVote, {
+      code,
+      hostToken: "host-browser-token",
+    }),
+  ).rejects.toThrow("There are no unused letters left for a replacement round.");
+
+  await t.run(async (ctx) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+    await ctx.db.patch(room._id, { status: "lobby" });
+    const players = await ctx.db
+      .query("players")
+      .withIndex("by_room", (queryBuilder) => queryBuilder.eq("roomId", room._id))
+      .collect();
+    for (const player of players) {
+      await ctx.db.patch(player._id, { ready: true });
+    }
+  });
+  await expect(
+    t.mutation(api.rooms.startRound, {
+      code,
+      hostToken: "host-browser-token",
+    }),
+  ).rejects.toThrow("Every letter in this room has already been played.");
+});

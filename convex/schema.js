@@ -16,7 +16,17 @@ export default defineSchema({
     hostToken: v.string(),
     roundNumber: v.optional(v.number()),
     letter: v.optional(v.string()),
+    letterHistory: v.optional(v.array(v.string())),
     roundEndsAt: v.optional(v.number()),
+    skipVoteRoundNumber: v.optional(v.number()),
+    skipVotes: v.optional(
+      v.array(
+        v.object({
+          playerId: v.id("players"),
+          skip: v.boolean(),
+        }),
+      ),
+    ),
     revealIndex: v.optional(v.number()),
     expiresAt: v.optional(v.number()),
   })
