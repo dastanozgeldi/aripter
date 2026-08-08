@@ -7,8 +7,6 @@ import {
 } from "convex/react";
 import { createRoot } from "react-dom/client";
 import { api } from "../convex/_generated/api";
-import { getArenaLayout } from "./arenaLayout";
-import { PlayerArena } from "./PlayerArena";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -459,17 +457,12 @@ function useSecondsLeft(roundEndsAt) {
 
 function PlayingRound({ room, onSaveAnswer }) {
   const [answers, setAnswers] = useState(room.viewerAnswers);
-  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [saveError, setSaveError] = useState("");
   const secondsLeft = useSecondsLeft(room.roundEndsAt);
   const answerCount = answers.filter((answer) => answer.trim()).length;
-  const activeAnswer = answers[activeCategoryIndex] ?? "";
-  const activeCategory = room.categories[activeCategoryIndex];
-  const isLastCategory = activeCategoryIndex === room.categories.length - 1;
 
   useEffect(() => {
     setAnswers(room.viewerAnswers);
-    setActiveCategoryIndex(0);
   }, [room.roundNumber]);
 
   const updateAnswer = (categoryIndex, value) => {
@@ -482,122 +475,45 @@ function PlayingRound({ room, onSaveAnswer }) {
     });
   };
 
-  const clearActiveAnswer = () => {
-    updateAnswer(activeCategoryIndex, "");
-  };
-
-  const advanceCategory = () => {
-    if (isLastCategory) {
-      const firstEmptyCategory = answers.findIndex((answer) => !answer.trim());
-      setActiveCategoryIndex(firstEmptyCategory === -1 ? 0 : firstEmptyCategory);
-      return;
-    }
-    setActiveCategoryIndex((current) => current + 1);
-  };
-
   return (
-    <div className="playing-content arena-round">
-      <div className="arena-stage">
-        <PlayerArena
-          letter={room.letter}
-          players={room.players}
-          viewerId={room.viewer.id}
-        />
+    <div className="playing-content">
+      <div className="round-focus">
+        <span className="eyebrow">
+          Round {room.roundNumber} · {room.language}
+        </span>
+        <div className="letter-display">{room.letter}</div>
+        <span className={`timer ${secondsLeft <= 10 ? "urgent" : ""}`}>
+          {Math.floor(secondsLeft / 60)}:
+          {String(secondsLeft % 60).padStart(2, "0")}
+        </span>
+        <p>Every answer must begin with this letter.</p>
+      </div>
 
-        <div className="arena-hud">
-          <div>
-            <span className="eyebrow">Round {room.roundNumber}</span>
-            <strong>{room.language}</strong>
-          </div>
-          <div className="arena-progress-count">
-            <span>Words locked in</span>
-            <strong>
-              {answerCount}/{room.categories.length}
-            </strong>
-          </div>
-          <div className={`arena-clock ${secondsLeft <= 10 ? "urgent" : ""}`}>
-            <span>Time left</span>
-            <strong>
-              {Math.floor(secondsLeft / 60)}:
-              {String(secondsLeft % 60).padStart(2, "0")}
-            </strong>
-          </div>
+      <div className="answer-sheet">
+        <div className="section-heading">
+          <span>Your answers</span>
+          <span>
+            {answerCount}/{room.categories.length}
+          </span>
         </div>
-
-        <section
-          aria-labelledby="active-category"
-          className="answer-command-board"
-        >
-          <div className="answer-board-heading">
-            <span>
-              Category {activeCategoryIndex + 1} / {room.categories.length}
-            </span>
-            <strong id="active-category">{activeCategory}</strong>
-          </div>
-          <div className="answer-board-control">
-            <span className="answer-letter-cue">{room.letter}</span>
+        {room.categories.map((category, index) => (
+          <label className="answer-row" key={`${room.roundNumber}-${index}`}>
+            <span className="answer-index">{index + 1}</span>
+            <span className="answer-category">{category}</span>
             <input
-              autoFocus
+              autoFocus={index === 0}
               disabled={secondsLeft === 0}
-              key={`${room.roundNumber}-${activeCategoryIndex}`}
               maxLength={120}
-              onChange={(event) =>
-                updateAnswer(activeCategoryIndex, event.target.value)
-              }
-              placeholder={`Type a word beginning with ${room.letter}…`}
-              value={activeAnswer}
+              onChange={(event) => updateAnswer(index, event.target.value)}
+              placeholder={`${room.letter}…`}
+              value={answers[index] ?? ""}
             />
-            <button
-              aria-label={`Clear answer for ${activeCategory}`}
-              className="answer-reject"
-              disabled={secondsLeft === 0 || !activeAnswer}
-              onClick={clearActiveAnswer}
-              type="button"
-            >
-              ×
-            </button>
-            <button
-              aria-label={
-                isLastCategory
-                  ? "Review unanswered categories"
-                  : "Go to next category"
-              }
-              className="answer-confirm"
-              disabled={secondsLeft === 0}
-              onClick={advanceCategory}
-              type="button"
-            >
-              ✓
-            </button>
-          </div>
-          <div className="answer-category-tabs" aria-label="Answer categories">
-            {room.categories.map((category, index) => (
-              <button
-                aria-label={`${category}: ${
-                  answers[index]?.trim() ? "answered" : "unanswered"
-                }`}
-                className={[
-                  index === activeCategoryIndex ? "active" : "",
-                  answers[index]?.trim() ? "answered" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={`${category}-${index}`}
-                onClick={() => setActiveCategoryIndex(index)}
-                type="button"
-              >
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{category}</strong>
-              </button>
-            ))}
-          </div>
-          {saveError && <p className="error-message">{saveError}</p>}
-        </section>
-
-        <div className="arena-help">
-          <span className="arena-live-dot" />
-          Answers save live · Every word starts with {room.letter}
-        </div>
+          </label>
+        ))}
+        {saveError && <p className="error-message">{saveError}</p>}
+        <p className="microcopy">
+          Answers save automatically. The server locks them when time expires.
+        </p>
       </div>
     </div>
   );
@@ -611,200 +527,103 @@ function RevealRound({
   onVote,
   votingAnswerId,
 }) {
-  const [activePlayerIndex, setActivePlayerIndex] = useState(0);
-  const [advancingPlayer, setAdvancingPlayer] = useState(false);
-  const [reviewComplete, setReviewComplete] = useState(false);
   const isLastCategory =
     room.reveal.categoryIndex === room.categories.length - 1;
-  const clockwisePlayers = getArenaLayout(room.players, room.viewer.id);
-  const activePlayer = clockwisePlayers[activePlayerIndex] ?? clockwisePlayers[0];
-  const activeAnswer = room.reveal.answers.find(
-    (answer) => answer.playerId === activePlayer?.id,
-  );
-  const hasAnswer = Boolean(activeAnswer?.value.trim());
-  const isOwnAnswer = activePlayer?.id === room.viewer.id;
-
-  useEffect(() => {
-    setActivePlayerIndex(0);
-    setAdvancingPlayer(false);
-    setReviewComplete(false);
-  }, [room.reveal.categoryIndex]);
-
-  const moveClockwise = () => {
-    if (activePlayerIndex >= clockwisePlayers.length - 1) {
-      setReviewComplete(true);
-      return;
-    }
-    setActivePlayerIndex((current) => current + 1);
-  };
-
-  const handleVoteAndContinue = async (approved) => {
-    if (!activePlayer) return;
-    setAdvancingPlayer(true);
-    try {
-      await onVote(activePlayer.id, approved);
-      moveClockwise();
-    } catch {
-      // The shared reveal error is rendered on the voting board.
-    } finally {
-      setAdvancingPlayer(false);
-    }
-  };
 
   return (
-    <div className="reveal-content arena-round">
-      <div className="arena-stage arena-reveal-stage">
-        <PlayerArena
-          focusedPlayerId={reviewComplete ? null : activePlayer?.id}
-          letter={room.letter}
-          mode="reveal"
-          players={room.players}
-          viewerId={room.viewer.id}
-        />
-
-        <div className="arena-hud">
-          <div>
-            <span className="eyebrow">Voting round</span>
-            <strong>{room.reveal.category}</strong>
-          </div>
-          <div className="arena-progress-count">
-            <span>Category</span>
-            <strong>
-              {room.reveal.categoryIndex + 1}/{room.categories.length}
-            </strong>
-          </div>
-          <div className="arena-clock">
-            <span>Clockwise seat</span>
-            <strong>
-              {reviewComplete
-                ? clockwisePlayers.length
-                : activePlayerIndex + 1}
-              /{clockwisePlayers.length}
-            </strong>
-          </div>
-        </div>
-
-        <section
-          aria-live="polite"
-          className="answer-command-board voting-command-board"
-        >
-          <div className="clockwise-progress" aria-label="Clockwise vote progress">
-            {clockwisePlayers.map((player, index) => (
-              <span
-                className={
-                  reviewComplete || index < activePlayerIndex
-                    ? "visited"
-                    : index === activePlayerIndex
-                      ? "active"
-                      : ""
-                }
-                key={player.id}
-                title={player.name}
-              />
-            ))}
-          </div>
-
-          {reviewComplete ? (
-            <div className="vote-finished">
-              <span className="eyebrow">Your circuit is complete</span>
-              <strong>Your votes are in.</strong>
-              <p>
-                {room.reveal.votingComplete
-                  ? "Everyone has finished this category."
-                  : "Waiting for the other players to finish their circuit."}
-              </p>
-              {room.viewer.isHost ? (
-                <button
-                  className="arena-primary-action"
-                  disabled={advancing || !room.reveal.votingComplete}
-                  onClick={onAdvance}
-                >
-                  {!room.reveal.votingComplete
-                    ? "Waiting for votes..."
-                    : advancing
-                      ? "Updating..."
-                      : isLastCategory
-                        ? "Reveal results"
-                        : "Next category"}
-                </button>
-              ) : (
-                <span className="vote-waiting-note">
-                  {room.reveal.votingComplete
-                    ? "Waiting for the host to continue."
-                    : "The arena updates as votes arrive."}
-                </span>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="vote-player-heading">
-                <span>
-                  Seat {activePlayerIndex + 1} · {room.reveal.category}
-                </span>
-                <strong>{activePlayer?.name}</strong>
-              </div>
-              <div
-                className={`arena-answer-reveal ${
-                  hasAnswer ? "" : "is-empty"
-                }`}
-              >
-                <span>{room.letter}</span>
-                <strong>{activeAnswer?.value.trim() || "No answer"}</strong>
-              </div>
-              {isOwnAnswer || !hasAnswer ? (
-                <div className="vote-skip-row">
-                  <span>
-                    {isOwnAnswer
-                      ? "Your approval is automatic."
-                      : "No vote is needed for an empty answer."}
-                  </span>
-                  <button
-                    className="arena-primary-action"
-                    onClick={moveClockwise}
-                  >
-                    Continue clockwise
-                  </button>
-                </div>
-              ) : (
-                <div className="arena-vote-actions">
-                  <button
-                    className={
-                      activeAnswer?.viewerVote === false ? "active reject" : ""
-                    }
-                    disabled={
-                      advancingPlayer ||
-                      votingAnswerId === activePlayer?.id
-                    }
-                    onClick={() => handleVoteAndContinue(false)}
-                  >
-                    <span>×</span>
-                    Reject
-                  </button>
-                  <button
-                    className={
-                      activeAnswer?.viewerVote === true ? "active approve" : ""
-                    }
-                    disabled={
-                      advancingPlayer ||
-                      votingAnswerId === activePlayer?.id
-                    }
-                    onClick={() => handleVoteAndContinue(true)}
-                  >
-                    <span>✓</span>
-                    Approve
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-          {error && <p className="error-message">{error}</p>}
-        </section>
-
-        <div className="arena-help">
-          <span className="arena-live-dot" />
-          Voting moves clockwise around the arena
-        </div>
+    <div className="reveal-content">
+      <div className="reveal-progress">
+        {room.categories.map((category, index) => (
+          <span
+            className={index <= room.reveal.categoryIndex ? "seen" : ""}
+            key={`${category}-${index}`}
+          />
+        ))}
       </div>
+      <span className="eyebrow">
+        Category {room.reveal.categoryIndex + 1} of {room.categories.length}
+      </span>
+      <h2>{room.reveal.category}</h2>
+      <div className="reveal-grid">
+        {room.reveal.answers.map((answer, index) => (
+          <article
+            className={`answer-card ${
+              answer.approved
+                ? "is-approved"
+                : answer.votingComplete && answer.value.trim()
+                  ? "is-rejected"
+                  : ""
+            }`}
+            key={answer.playerId}
+            style={{ "--delay": `${index * 90}ms` }}
+          >
+            <div className="avatar">{answer.name.slice(0, 1).toUpperCase()}</div>
+            <span>{answer.name}</span>
+            <strong>{answer.value.trim() || "No answer"}</strong>
+            {answer.value.trim() ? (
+              <>
+                <em className="vote-summary">
+                  {answer.approved
+                    ? `Approved · +1`
+                    : answer.votingComplete
+                      ? "Rejected · 0"
+                      : `${answer.approvals} approval${
+                          answer.approvals === 1 ? "" : "s"
+                        } · ${answer.requiredApprovals} needed`}
+                </em>
+                {answer.playerId === room.viewer.id ? (
+                  <span className="own-vote">
+                    Your approval is automatic.
+                  </span>
+                ) : (
+                  <div className="vote-actions">
+                    <button
+                      aria-label={`Approve ${answer.name}'s answer`}
+                      className={answer.viewerVote === true ? "active approve" : ""}
+                      disabled={votingAnswerId === answer.playerId}
+                      onClick={() => onVote(answer.playerId, true)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      aria-label={`Reject ${answer.name}'s answer`}
+                      className={answer.viewerVote === false ? "active reject" : ""}
+                      disabled={votingAnswerId === answer.playerId}
+                      onClick={() => onVote(answer.playerId, false)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <em className="vote-summary">No vote needed · 0</em>
+            )}
+          </article>
+        ))}
+      </div>
+      {room.viewer.isHost ? (
+        <button
+          className="primary-button"
+          disabled={advancing || !room.reveal.votingComplete}
+          onClick={onAdvance}
+        >
+          {!room.reveal.votingComplete
+            ? "Waiting for votes..."
+            : advancing
+            ? "Updating..."
+            : isLastCategory
+              ? "See results"
+              : "Next category"}
+        </button>
+      ) : (
+        <p className="microcopy">
+          {room.reveal.votingComplete
+            ? "Voting complete. Waiting for the host."
+            : "Vote on every other player’s non-empty answer."}
+        </p>
+      )}
+      {error && <p className="error-message">{error}</p>}
     </div>
   );
 }
@@ -812,74 +631,62 @@ function RevealRound({
 function Results({ room, error, onReturnToLobby, returning }) {
   const noWinner = room.results.winners.length === 0;
   const tied = room.results.winners.length > 1;
-  const winnerStandings = room.results.standings.filter(
-    (standing) => standing.isWinner,
-  );
   const winnerNames = room.results.winners
     .map((winner) => winner.name)
     .join(" & ");
 
   return (
-    <div className="results-content arena-round">
-      <div className="arena-stage arena-results-stage">
-        <PlayerArena
-          letter={room.letter}
-          mode="results"
-          players={room.players}
-          standings={room.results.standings}
-          viewerId={room.viewer.id}
-        />
-
-        <section className="arena-results-banner">
-          <span className="eyebrow">Round {room.roundNumber} complete</span>
-          <h2>
-            {noWinner
-              ? "No winner this round"
-              : tied
-                ? "A royal tie"
-                : `${winnerNames} wins`}
-          </h2>
-          <p>
-            {noWinner
-              ? "No answers earned majority approval."
-              : `${winnerNames} ${
-                  tied ? "each receive a crown." : "takes the crown."
-                }`}
-          </p>
-          {!noWinner && (
-            <div className="arena-winner-stats">
-              {winnerStandings.map((standing) => (
-                <span key={standing.playerId}>
-                  <strong>{standing.roundScore}</strong>{" "}
-                  {standing.roundScore === 1 ? "approved word" : "approved words"}
-                  <em>·</em>
-                  <strong>{standing.points}</strong> total{" "}
-                  {standing.points === 1 ? "point" : "points"}
-                </span>
-              ))}
+    <div className="results-content">
+      <span className="eyebrow">Round {room.roundNumber} complete</span>
+      <h2>
+        {noWinner
+          ? "No winner this round"
+          : tied
+            ? "It’s a tie"
+            : `${winnerNames} wins`}
+      </h2>
+      <p>
+        {noWinner
+          ? "No answers earned majority approval."
+          : `${winnerNames} ${
+              tied ? "each get a round point." : "gets the round point."
+            }`}
+      </p>
+      <div className="scoreboard">
+        {room.results.standings.map((standing, index) => (
+          <div
+            className={`score-row ${standing.isWinner ? "leader" : ""}`}
+            key={standing.playerId}
+          >
+            <span className="rank">{String(index + 1).padStart(2, "0")}</span>
+            <div className="avatar">
+              {standing.name.slice(0, 1).toUpperCase()}
             </div>
-          )}
-          {room.viewer.isHost ? (
-            <button
-              className="arena-primary-action"
-              disabled={returning}
-              onClick={onReturnToLobby}
-            >
-              {returning ? "Opening lobby..." : "Play another round"}
-            </button>
-          ) : (
-            <span className="vote-waiting-note">
-              Waiting for the host to open the next round.
+            <strong>{standing.name}</strong>
+            <span className="round-score">
+              {standing.roundScore}{" "}
+              {standing.roundScore === 1 ? "word" : "words"}
             </span>
-          )}
-          {error && <p className="error-message">{error}</p>}
-        </section>
-
-        <div className="arena-help">
-          <span className="arena-live-dot" />
-          Round score and total points are shown above every player
-        </div>
+            <span className="total-score">
+              {standing.points} {standing.points === 1 ? "pt" : "pts"}
+            </span>
+          </div>
+        ))}
       </div>
+      {room.viewer.isHost ? (
+        <button
+          className="primary-button"
+          disabled={returning}
+          onClick={onReturnToLobby}
+        >
+          {returning ? "Opening lobby..." : "Play another round"}
+        </button>
+      ) : (
+        <p className="microcopy">
+          Waiting for the host to open the next round.
+        </p>
+      )}
+      {error && <p className="error-message">{error}</p>}
     </div>
   );
 }
@@ -1001,7 +808,6 @@ function HowToPlay({ onClose }) {
 function GameShell({
   stageNumber,
   children,
-  immersive = false,
   leaving = false,
   onLeaveRoom,
   showIntro = false,
@@ -1009,7 +815,7 @@ function GameShell({
   const [showHowToPlay, setShowHowToPlay] = useState(false);
 
   return (
-    <main className={`game-app ${immersive ? "is-immersive-app" : ""}`}>
+    <main className="game-app">
       <header className="party-header">
         <a className="brand" href="/">WORDLORD</a>
         <div className="round-pill">One letter · Loads of words</div>
@@ -1036,7 +842,7 @@ function GameShell({
         <HowToPlay onClose={() => setShowHowToPlay(false)} />
       )}
 
-      <div className={`party-shell ${immersive ? "is-immersive" : ""}`}>
+      <div className="party-shell">
         <aside className="stage-rail" aria-label="Game progress">
           {["Room", "Lobby", "Play", "Reveal", "Results"].map((label, index) => (
             <div
@@ -1189,7 +995,6 @@ function RoomApp() {
       });
     } catch (error) {
       setRevealError(getErrorMessage(error));
-      throw error;
     } finally {
       setVotingAnswerId("");
     }
@@ -1263,7 +1068,6 @@ function RoomApp() {
   if (room.status === "playing") {
     return (
       <GameShell
-        immersive
         leaving={leaving}
         onLeaveRoom={handleLeaveRoom}
         stageNumber={3}
@@ -1286,7 +1090,6 @@ function RoomApp() {
   if (room.status === "reveal") {
     return (
       <GameShell
-        immersive
         leaving={leaving}
         onLeaveRoom={handleLeaveRoom}
         stageNumber={4}
@@ -1306,7 +1109,6 @@ function RoomApp() {
   if (room.status === "results") {
     return (
       <GameShell
-        immersive
         leaving={leaving}
         onLeaveRoom={handleLeaveRoom}
         stageNumber={5}
