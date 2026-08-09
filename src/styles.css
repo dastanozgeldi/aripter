@@ -52,6 +52,8 @@ a {
 }
 
 .field > span,
+.category-heading > span,
+.duration-heading > span,
 .section-heading {
   font-size: 12px;
   font-weight: 700;
@@ -157,25 +159,96 @@ a {
   font-weight: 700;
 }
 
-.duration-inputs {
+.category-heading,
+.duration-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+
+.randomize-button {
+  display: inline-flex;
+  min-height: 34px;
+  padding: 7px 11px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #181818;
+  border-radius: 99px;
+  background: #ddff56;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.randomize-button:hover span {
+  transform: rotate(45deg);
+}
+
+.randomize-button span {
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.duration-heading strong {
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+}
+
+.duration-control {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  padding: 14px 16px 11px;
+  gap: 8px;
+  border: 1px solid rgba(24, 24, 24, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.46);
 }
 
-.duration-part {
-  display: grid;
-  gap: 7px;
+.duration-control input[type="range"] {
+  width: 100%;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: #181818;
 }
 
-.duration-part span {
-  color: rgba(24, 24, 24, 0.58);
-  font-size: 12px;
-  font-weight: 700;
+.duration-control input[type="range"]:focus {
+  box-shadow: none;
 }
 
-.duration-part input {
-  padding: 10px 12px;
+.duration-scale {
+  position: relative;
+  height: 11px;
+  color: rgba(24, 24, 24, 0.48);
+  font-family: "DM Mono", monospace;
+  font-size: 9px;
+}
+
+.duration-scale span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+
+.duration-scale span:first-child {
+  left: 0;
+}
+
+.duration-scale span:nth-child(2) {
+  left: 47.8%;
+  transform: translateX(-50%);
+}
+
+.duration-scale span:nth-child(3) {
+  left: 73.9%;
+  transform: translateX(-50%);
+}
+
+.duration-scale span:last-child {
+  right: 0;
 }
 
 .primary-button,

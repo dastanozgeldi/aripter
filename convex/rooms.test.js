@@ -78,7 +78,7 @@ test("creating a room accepts custom round time and more than eight categories",
   });
 });
 
-test("creating a room rejects invalid custom round times", async () => {
+test("creating a room rejects round times longer than two minutes", async () => {
   const t = convexTest(schema, modules);
 
   await expect(
@@ -87,9 +87,9 @@ test("creating a room rejects invalid custom round times", async () => {
       hostName: "Dastan",
       language: "English",
       categories: ["Movie", "Song"],
-      durationSeconds: 0,
+      durationSeconds: 121,
     }),
-  ).rejects.toThrow("Choose a round duration between 5 seconds and 60 minutes.");
+  ).rejects.toThrow("Choose a round duration between 5 seconds and 2 minutes.");
 });
 
 test("a second browser can join an existing lobby by code", async () => {

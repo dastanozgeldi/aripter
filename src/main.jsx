@@ -7,6 +7,10 @@ import {
 } from "convex/react";
 import { createRoot } from "react-dom/client";
 import { api } from "../convex/_generated/api";
+import {
+  getRandomCategoryCount,
+  pickRandomCategories,
+} from "./categories";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -20,8 +24,7 @@ const INITIAL_CATEGORIES = [
   "Станция в Токио",
 ];
 const MIN_ROUND_SECONDS = 5;
-const MAX_ROUND_SECONDS = 60 * 60;
-const MAX_SECONDS_FIELD = 59;
+const MAX_ROUND_SECONDS = 2 * 60;
 const PLAYER_TOKEN_KEY = "wordlord-player-token";
 const LEGACY_PLAYER_TOKEN_KEY = "obds-player-token";
 
@@ -96,32 +99,11 @@ function formatDuration(seconds, style = "long") {
     : `${minutes} min ${remainingSeconds} sec`;
 }
 
-function getDurationSeconds(minutesValue, secondsValue) {
-  const minutes = minutesValue === "" ? 0 : Number(minutesValue);
-  const seconds = secondsValue === "" ? 0 : Number(secondsValue);
-  const durationSeconds = minutes * 60 + seconds;
-
-  if (
-    !Number.isInteger(minutes) ||
-    !Number.isInteger(seconds) ||
-    minutes < 0 ||
-    seconds < 0 ||
-    seconds > MAX_SECONDS_FIELD ||
-    !Number.isInteger(durationSeconds) ||
-    durationSeconds < MIN_ROUND_SECONDS ||
-    durationSeconds > MAX_ROUND_SECONDS
-  ) {
-    return null;
-  }
-  return durationSeconds;
-}
-
 function SetupForm({ onCreate }) {
   const [hostName, setHostName] = useState("");
   const [language, setLanguage] = useState("Russian");
   const [categories, setCategories] = useState(INITIAL_CATEGORIES);
-  const [durationMinutes, setDurationMinutes] = useState("1");
-  const [durationSeconds, setDurationSeconds] = useState("0");
+  const [durationSeconds, setDurationSeconds] = useState(60);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const categoryListRef = useRef(null);
@@ -154,6 +136,13 @@ function SetupForm({ onCreate }) {
     setCategories((current) => [...current, ""]);
   };
 
+  const randomizeCategories = () => {
+    setCategories(pickRandomCategories(language, durationSeconds));
+    requestAnimationFrame(() => {
+      categoryListRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
   const removeCategory = (index) => {
     if (categories.length > 2) {
       setCategories((current) =>
@@ -167,12 +156,12 @@ function SetupForm({ onCreate }) {
     setSubmitting(true);
     setError("");
 
-    const roundDurationSeconds = getDurationSeconds(
-      durationMinutes,
-      durationSeconds,
-    );
-    if (!roundDurationSeconds) {
-      setError("Choose a round time from 5 seconds up to 60 minutes.");
+    if (
+      !Number.isInteger(durationSeconds) ||
+      durationSeconds < MIN_ROUND_SECONDS ||
+      durationSeconds > MAX_ROUND_SECONDS
+    ) {
+      setError("Choose a round time from 5 seconds up to 2 minutes.");
       setSubmitting(false);
       return;
     }
@@ -182,7 +171,7 @@ function SetupForm({ onCreate }) {
         hostName,
         language,
         categories,
-        durationSeconds: roundDurationSeconds,
+        durationSeconds,
       });
     } catch (submitError) {
       setError(getErrorMessage(submitError));
@@ -214,7 +203,17 @@ function SetupForm({ onCreate }) {
       </label>
 
       <div className="field">
-        <span>Categories</span>
+        <div className="category-heading">
+          <span>Categories</span>
+          <button
+            className="randomize-button"
+            onClick={randomizeCategories}
+            type="button"
+          >
+            <span aria-hidden="true">↻</span>
+            Randomize {getRandomCategoryCount(durationSeconds)}
+          </button>
+        </div>
         <div className={`category-list-frame ${hasHiddenCategories ? "has-more" : ""}`}>
           <div
             className="category-list"
@@ -255,34 +254,26 @@ function SetupForm({ onCreate }) {
       </div>
 
       <div className="field">
-        <span>Round time</span>
-        <div className="duration-inputs">
-          <label className="duration-part">
-            <span>Minutes</span>
-            <input
-              aria-label="Round time minutes"
-              inputMode="numeric"
-              max={Math.floor(MAX_ROUND_SECONDS / 60)}
-              min={0}
-              onChange={(event) => setDurationMinutes(event.target.value)}
-              step={1}
-              type="number"
-              value={durationMinutes}
-            />
-          </label>
-          <label className="duration-part">
-            <span>Seconds</span>
-            <input
-              aria-label="Round time seconds"
-              inputMode="numeric"
-              max={MAX_SECONDS_FIELD}
-              min={0}
-              onChange={(event) => setDurationSeconds(event.target.value)}
-              step={5}
-              type="number"
-              value={durationSeconds}
-            />
-          </label>
+        <div className="duration-heading">
+          <span>Round time</span>
+          <strong>{formatDuration(durationSeconds)}</strong>
+        </div>
+        <div className="duration-control">
+          <input
+            aria-label="Round time"
+            max={MAX_ROUND_SECONDS}
+            min={MIN_ROUND_SECONDS}
+            onChange={(event) => setDurationSeconds(Number(event.target.value))}
+            step={5}
+            type="range"
+            value={durationSeconds}
+          />
+          <div className="duration-scale" aria-hidden="true">
+            <span>0:05</span>
+            <span>1:00</span>
+            <span>1:30</span>
+            <span>2:00 max</span>
+          </div>
         </div>
       </div>
 

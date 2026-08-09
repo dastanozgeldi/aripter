@@ -7,7 +7,7 @@ const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 const CODE_LENGTH = 6;
 const MIN_CATEGORIES = 2;
 const MIN_ROUND_SECONDS = 5;
-const MAX_ROUND_SECONDS = 60 * 60;
+const MAX_ROUND_SECONDS = 2 * 60;
 const PRESENCE_TIMEOUT_MS = 30_000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const LETTERS_BY_LANGUAGE = {
@@ -39,7 +39,7 @@ function normalizeDurationSeconds(durationSeconds) {
     durationSeconds < MIN_ROUND_SECONDS ||
     durationSeconds > MAX_ROUND_SECONDS
   ) {
-    throw new ConvexError("Choose a round duration between 5 seconds and 60 minutes.");
+    throw new ConvexError("Choose a round duration between 5 seconds and 2 minutes.");
   }
   return durationSeconds;
 }
