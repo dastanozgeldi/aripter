@@ -8,6 +8,7 @@ const CODE_LENGTH = 6;
 const MIN_CATEGORIES = 2;
 const MIN_ROUND_SECONDS = 5;
 const MAX_ROUND_SECONDS = 2 * 60;
+const FINAL_COUNTDOWN_MS = 5_000;
 const PRESENCE_TIMEOUT_MS = 30_000;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const LETTERS_BY_LANGUAGE = {
@@ -484,6 +485,7 @@ export const startRound = mutation({
       letter,
       letterHistory: [...getLetterHistory(room), letter],
       roundEndsAt,
+      finalCountdownPlayerId: undefined,
       skipVoteRoundNumber: undefined,
       skipVotes: undefined,
     });
@@ -517,6 +519,9 @@ export const initiateSkipVote = mutation({
     }
     if (room.skipVoteRoundNumber === room.roundNumber) {
       throw new ConvexError("A skip vote is already open.");
+    }
+    if (room.finalCountdownPlayerId) {
+      throw new ConvexError("The final countdown has already started.");
     }
     if (getUnusedLetters(room).length === 0) {
       throw new ConvexError("There are no unused letters left for a replacement round.");
@@ -602,6 +607,7 @@ export const voteToSkip = mutation({
         letter,
         letterHistory: [...getLetterHistory(room), letter],
         roundEndsAt,
+        finalCountdownPlayerId: undefined,
         skipVoteRoundNumber: undefined,
         skipVotes: undefined,
       });
@@ -641,6 +647,76 @@ export const finishRound = internalMutation({
     }
 
     await ctx.db.patch(room._id, { status: "reveal", revealIndex: 0 });
+  },
+});
+
+export const startFinalCountdown = mutation({
+  args: {
+    code: v.string(),
+    playerToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (queryBuilder) => queryBuilder.eq("code", code))
+      .unique();
+
+    if (!room) throw new ConvexError("Room not found.");
+    if (
+      room.status !== "playing" ||
+      !room.roundNumber ||
+      !room.roundEndsAt ||
+      Date.now() >= room.roundEndsAt
+    ) {
+      throw new ConvexError("This round is closed.");
+    }
+    const player = await ctx.db
+      .query("players")
+      .withIndex("by_room_and_token", (queryBuilder) =>
+        queryBuilder.eq("roomId", room._id).eq("token", args.playerToken),
+      )
+      .unique();
+    if (!player || player.activeRoundNumber !== room.roundNumber) {
+      throw new ConvexError("You are not playing in this round.");
+    }
+    if (room.finalCountdownPlayerId) return;
+    if (room.roundEndsAt - Date.now() <= FINAL_COUNTDOWN_MS) {
+      throw new ConvexError("The final seconds are already underway.");
+    }
+
+    const answers = await ctx.db
+      .query("answers")
+      .withIndex("by_room_round_player_category", (queryBuilder) =>
+        queryBuilder
+          .eq("roomId", room._id)
+          .eq("roundNumber", room.roundNumber)
+          .eq("playerId", player._id),
+      )
+      .collect();
+    const completedCategories = new Set(
+      answers
+        .filter((answer) => answer.value.trim())
+        .map((answer) => answer.categoryIndex),
+    );
+    if (completedCategories.size !== room.categories.length) {
+      throw new ConvexError("Fill every category before pressing Done.");
+    }
+
+    const roundEndsAt = Math.min(
+      room.roundEndsAt,
+      Date.now() + FINAL_COUNTDOWN_MS,
+    );
+    await ctx.db.patch(room._id, {
+      roundEndsAt,
+      finalCountdownPlayerId: player._id,
+      skipVoteRoundNumber: undefined,
+      skipVotes: undefined,
+    });
+    await ctx.scheduler.runAt(roundEndsAt, internal.rooms.finishRound, {
+      roomId: room._id,
+      roundNumber: room.roundNumber,
+    });
   },
 });
 
@@ -1085,6 +1161,19 @@ export const get = query({
       };
     }
 
+    const finalCountdownPlayer = room.finalCountdownPlayerId
+      ? orderedPlayers.find(
+          (player) => player._id === room.finalCountdownPlayerId,
+        )
+      : null;
+    const finalCountdown =
+      room.status === "playing" && finalCountdownPlayer
+        ? {
+            playerId: finalCountdownPlayer._id,
+            playerName: finalCountdownPlayer.name,
+          }
+        : null;
+
     let results = null;
     if (room.status === "results" && room.roundNumber) {
       const answers = await ctx.db
@@ -1149,6 +1238,7 @@ export const get = query({
       remainingLetters: Math.max(0, totalLetters - letterHistory.length),
       totalLetters,
       roundEndsAt: room.roundEndsAt ?? null,
+      finalCountdown,
       skipVote,
       revealIndex: room.revealIndex ?? 0,
       viewerAnswers,

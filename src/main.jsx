@@ -25,18 +25,24 @@ const INITIAL_CATEGORIES = [
 ];
 const MIN_ROUND_SECONDS = 5;
 const MAX_ROUND_SECONDS = 2 * 60;
-const PLAYER_TOKEN_KEY = "wordlord-player-token";
-const LEGACY_PLAYER_TOKEN_KEY = "obds-player-token";
+const FINAL_COUNTDOWN_SECONDS = 5;
+const PLAYER_TOKEN_KEY = "aripter-player-token";
+const LEGACY_PLAYER_TOKEN_KEYS = [
+  "wordlord-player-token",
+  "obds-player-token",
+];
 
 function getPlayerToken() {
   const storedToken = window.localStorage.getItem(PLAYER_TOKEN_KEY);
   if (storedToken) return storedToken;
 
-  const legacyToken = window.localStorage.getItem(LEGACY_PLAYER_TOKEN_KEY);
-  if (legacyToken) {
-    window.localStorage.setItem(PLAYER_TOKEN_KEY, legacyToken);
-    window.localStorage.removeItem(LEGACY_PLAYER_TOKEN_KEY);
-    return legacyToken;
+  for (const legacyKey of LEGACY_PLAYER_TOKEN_KEYS) {
+    const legacyToken = window.localStorage.getItem(legacyKey);
+    if (legacyToken) {
+      window.localStorage.setItem(PLAYER_TOKEN_KEY, legacyToken);
+      window.localStorage.removeItem(legacyKey);
+      return legacyToken;
+    }
   }
 
   const token =
@@ -524,7 +530,10 @@ function SkipVoteDialog({ error, onVote, room, voting }) {
 }
 
 function PlayingRound({
+  finishing,
+  finishError,
   initiatingSkip,
+  onFinish,
   onInitiateSkip,
   onSaveAnswer,
   onSkipVote,
@@ -536,6 +545,7 @@ function PlayingRound({
   const [saveError, setSaveError] = useState("");
   const secondsLeft = useSecondsLeft(room.roundEndsAt);
   const answerCount = answers.filter((answer) => answer.trim()).length;
+  const allAnswersComplete = answerCount === room.categories.length;
 
   useEffect(() => {
     setAnswers(room.viewerAnswers);
@@ -562,6 +572,12 @@ function PlayingRound({
           {Math.floor(secondsLeft / 60)}:
           {String(secondsLeft % 60).padStart(2, "0")}
         </span>
+        {room.finalCountdown && (
+          <div className="final-countdown-banner" role="status">
+            <strong>{room.finalCountdown.playerName} finished!</strong>
+            <span>Five seconds left for everyone.</span>
+          </div>
+        )}
         <p>Every answer must begin with this letter.</p>
         <span className="letters-remaining">
           {room.remainingLetters} unused {room.remainingLetters === 1 ? "letter" : "letters"}
@@ -573,6 +589,7 @@ function PlayingRound({
             disabled={
               initiatingSkip ||
               Boolean(room.skipVote) ||
+              Boolean(room.finalCountdown) ||
               room.remainingLetters === 0
             }
             onClick={onInitiateSkip}
@@ -611,8 +628,32 @@ function PlayingRound({
           </label>
         ))}
         {saveError && <p className="error-message">{saveError}</p>}
+        <button
+          className="primary-button done-button"
+          disabled={
+            !allAnswersComplete ||
+            secondsLeft <= FINAL_COUNTDOWN_SECONDS ||
+            finishing ||
+            Boolean(room.finalCountdown)
+          }
+          onClick={onFinish}
+          type="button"
+        >
+          {room.finalCountdown
+            ? "Final countdown started"
+            : secondsLeft <= FINAL_COUNTDOWN_SECONDS
+              ? "Final seconds underway"
+              : finishing
+                ? "Starting countdown..."
+                : "Done · Start final 5 seconds"}
+        </button>
+        {finishError && <p className="error-message">{finishError}</p>}
         <p className="microcopy">
-          Answers save automatically. The server locks them when time expires.
+          {secondsLeft <= FINAL_COUNTDOWN_SECONDS
+            ? "Final seconds underway. Answers lock when the timer reaches zero."
+            : allAnswersComplete
+              ? "Ready? Press Done to give everyone five final seconds."
+              : "Fill every category to unlock Done. Answers save automatically."}
         </p>
       </div>
       {room.skipVote && (
@@ -865,7 +906,7 @@ function HowToPlay({ onClose }) {
         <div className="how-to-play-heading">
           <div>
             <span className="eyebrow">The rules</span>
-            <h2 id="how-to-play-title">How to play Wordlord</h2>
+            <h2 id="how-to-play-title">How to play Aripter</h2>
           </div>
           <button
             aria-label="Close how to play"
@@ -892,7 +933,10 @@ function HowToPlay({ onClose }) {
             <span>02</span>
             <div>
               <strong>Race the clock</strong>
-              <p>Fill each category with an answer beginning with the letter.</p>
+              <p>
+                Fill each category with an answer beginning with the letter. The
+                first player to finish can start the final five seconds.
+              </p>
             </div>
           </li>
           <li>
@@ -932,7 +976,7 @@ function GameShell({
   return (
     <main className="game-app">
       <header className="party-header">
-        <a className="brand" href="/">WORDLORD</a>
+        <a className="brand" href="/">ARIPTER</a>
         <div className="round-pill">One letter · Loads of words</div>
         <div className="header-actions">
           <button
@@ -1013,6 +1057,8 @@ function RoomApp() {
   const [skipError, setSkipError] = useState("");
   const [initiatingSkip, setInitiatingSkip] = useState(false);
   const [votingToSkip, setVotingToSkip] = useState(false);
+  const [finishError, setFinishError] = useState("");
+  const [finishing, setFinishing] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const createRoom = useMutation(api.rooms.create);
   const joinRoom = useMutation(api.rooms.join);
@@ -1022,6 +1068,7 @@ function RoomApp() {
   const startRound = useMutation(api.rooms.startRound);
   const initiateSkipVote = useMutation(api.rooms.initiateSkipVote);
   const voteToSkip = useMutation(api.rooms.voteToSkip);
+  const startFinalCountdown = useMutation(api.rooms.startFinalCountdown);
   const saveAnswer = useMutation(api.rooms.saveAnswer);
   const voteAnswer = useMutation(api.rooms.voteAnswer);
   const advanceReveal = useMutation(api.rooms.advanceReveal);
@@ -1036,10 +1083,21 @@ function RoomApp() {
     setAdvancingReveal(false);
     setInitiatingSkip(false);
     setVotingToSkip(false);
+    if (room.finalCountdown || room.status !== "playing") setFinishing(false);
     if (!room.skipVote) setSkipError("");
     if (room.status !== "lobby") setStarting(false);
     if (room.status === "lobby") setReturning(false);
-  }, [room?.status, room?.roundNumber, room?.revealIndex, room?.skipVote]);
+  }, [
+    room?.status,
+    room?.roundNumber,
+    room?.revealIndex,
+    room?.skipVote,
+    room?.finalCountdown,
+  ]);
+
+  useEffect(() => {
+    setFinishError("");
+  }, [room?.roundNumber]);
 
   useEffect(() => {
     if (!roomCode || !room?.viewer) return undefined;
@@ -1125,6 +1183,17 @@ function RoomApp() {
     } catch (error) {
       setSkipError(getErrorMessage(error));
       setVotingToSkip(false);
+    }
+  };
+
+  const handleFinish = async () => {
+    setFinishing(true);
+    setFinishError("");
+    try {
+      await startFinalCountdown({ code: roomCode, playerToken });
+    } catch (error) {
+      setFinishError(getErrorMessage(error));
+      setFinishing(false);
     }
   };
 
@@ -1218,7 +1287,10 @@ function RoomApp() {
         stageNumber={3}
       >
         <PlayingRound
+          finishing={finishing}
+          finishError={finishError}
           initiatingSkip={initiatingSkip}
+          onFinish={handleFinish}
           onInitiateSkip={handleInitiateSkip}
           onSaveAnswer={(categoryIndex, value) =>
             saveAnswer({

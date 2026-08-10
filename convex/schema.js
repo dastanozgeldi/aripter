@@ -18,6 +18,7 @@ export default defineSchema({
     letter: v.optional(v.string()),
     letterHistory: v.optional(v.array(v.string())),
     roundEndsAt: v.optional(v.number()),
+    finalCountdownPlayerId: v.optional(v.id("players")),
     skipVoteRoundNumber: v.optional(v.number()),
     skipVotes: v.optional(
       v.array(

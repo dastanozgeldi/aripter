@@ -512,6 +512,26 @@ a {
   color: #ef3f28;
 }
 
+.final-countdown-banner {
+  display: grid;
+  margin-top: 12px;
+  padding: 10px 16px;
+  gap: 2px;
+  border: 1px solid #181818;
+  border-radius: 11px;
+  background: #ddff56;
+  animation: panel-in 220ms both;
+}
+
+.final-countdown-banner strong {
+  font-family: "Manrope", sans-serif;
+  font-size: 14px;
+}
+
+.final-countdown-banner span {
+  font-size: 11px;
+}
+
 .answer-sheet {
   display: grid;
   gap: 9px;
@@ -544,6 +564,10 @@ a {
 
 .answer-sheet .primary-button {
   margin-top: 8px;
+}
+
+.done-button {
+  width: 100%;
 }
 
 .reveal-content,

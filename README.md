@@ -1,4 +1,4 @@
-# Wordlord
+# Aripter
 
 Multiplayer category game: one letter, loads of words.
 
@@ -40,6 +40,7 @@ The Convex room entry flow is live:
 - the host can open a majority vote to replace the current letter-round
 - rooms show their letter history and end after the selected alphabet is exhausted
 - answers save privately during play and lock at the deadline
+- the first player to fill every category can start a shared five-second final countdown
 - locked answers are revealed to everyone one category at a time
 - the host advances the reveal and opens the results
 - players approve or reject each other’s revealed answers

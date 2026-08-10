@@ -708,6 +708,110 @@ test("a player can save private answers during the round", async () => {
   expect(hostRoom?.viewerAnswers).toEqual(["", ""]);
 });
 
+test("Done stays locked until the player has answered every category", async () => {
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  await t.mutation(api.rooms.saveAnswer, {
+    code,
+    playerToken: "friend-browser-token",
+    categoryIndex: 0,
+    value: "The Matrix",
+  });
+
+  await expect(
+    t.mutation(api.rooms.startFinalCountdown, {
+      code,
+      playerToken: "friend-browser-token",
+    }),
+  ).rejects.toThrow("Fill every category before pressing Done.");
+});
+
+test("the first completed player starts a shared five-second final countdown", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
+  const t = convexTest(schema, modules);
+  const { code } = await t.mutation(api.rooms.create, {
+    hostToken: "host-browser-token",
+    hostName: "Dastan",
+    language: "English",
+    categories: ["Movie", "Song"],
+    durationSeconds: 60,
+  });
+  await t.mutation(api.rooms.join, {
+    code,
+    playerToken: "friend-browser-token",
+    playerName: "Masha",
+  });
+  for (const playerToken of ["host-browser-token", "friend-browser-token"]) {
+    await t.mutation(api.rooms.setReady, { code, playerToken, ready: true });
+  }
+  await t.mutation(api.rooms.startRound, {
+    code,
+    hostToken: "host-browser-token",
+  });
+  for (const [playerToken, answers] of [
+    ["host-browser-token", ["Moonlight", "Material Girl"]],
+    ["friend-browser-token", ["Memento", "Money"]],
+  ]) {
+    for (const [categoryIndex, value] of answers.entries()) {
+      await t.mutation(api.rooms.saveAnswer, {
+        code,
+        playerToken,
+        categoryIndex,
+        value,
+      });
+    }
+  }
+
+  await t.mutation(api.rooms.startFinalCountdown, {
+    code,
+    playerToken: "friend-browser-token",
+  });
+  await t.mutation(api.rooms.startFinalCountdown, {
+    code,
+    playerToken: "host-browser-token",
+  });
+
+  const hostRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(hostRoom).toMatchObject({
+    status: "playing",
+    roundEndsAt: Date.now() + 5_000,
+    finalCountdown: {
+      playerName: "Masha",
+    },
+  });
+
+  vi.advanceTimersByTime(5_001);
+  await t.finishInProgressScheduledFunctions();
+  const finishedRoom = await t.query(api.rooms.get, {
+    code,
+    playerToken: "host-browser-token",
+  });
+  expect(finishedRoom?.status).toBe("reveal");
+  expect(finishedRoom?.finalCountdown).toBeNull();
+});
+
 test("answers cannot be changed after the shared deadline", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-08T00:00:00Z"));
