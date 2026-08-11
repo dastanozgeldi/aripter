@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="title">
+  <title id="title">Aripter</title>
+  <g transform="rotate(-14 39 67)">
+    <rect x="10" y="26" width="61" height="80" rx="9" fill="#ddff56" />
+  </g>
+  <g transform="rotate(14 81 68)">
+    <rect x="53" y="24" width="55" height="84" rx="9" fill="#181818" />
+  </g>
+  <path
+    fill="#181818"
+    stroke="#f4f1e9"
+    stroke-linejoin="round"
+    stroke-width="4"
+    fill-rule="evenodd"
+    d="M43 11a9 9 0 0 1 9-7h17a9 9 0 0 1 9 7l25 91a9 9 0 0 1-9 12H80l-6-22H47l-6 22H26a9 9 0 0 1-9-12Zm11 48a8 8 0 0 0-8 7l-2 12a7 7 0 0 0 7 8h6l4 8 4-8h6a7 7 0 0 0 7-8l-2-12a8 8 0 0 0-8-7Z"
+  />
+</svg>

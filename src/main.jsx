@@ -976,7 +976,10 @@ function GameShell({
   return (
     <main className="game-app">
       <header className="party-header">
-        <a className="brand" href="/">ARIPTER</a>
+        <a className="brand" href="/" aria-label="Aripter home">
+          <img src="/aripter-mark.svg" alt="" />
+          <span>ARIPTER</span>
+        </a>
         <div className="round-pill">One letter · Loads of words</div>
         <div className="header-actions">
           <button
