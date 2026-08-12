@@ -606,6 +606,38 @@ a {
   background: currentColor;
 }
 
+.personal-vote-progress {
+  display: flex;
+  padding: 12px 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  border: 2px solid #684bf5;
+  border-radius: 12px;
+  background: rgba(104, 75, 245, 0.09);
+  color: #5136d5;
+  text-align: left;
+}
+
+.personal-vote-progress strong {
+  font-family: "Manrope", sans-serif;
+  font-size: 15px;
+}
+
+.personal-vote-progress span {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.personal-vote-progress.is-complete {
+  border-color: rgba(87, 118, 0, 0.45);
+  background: rgba(221, 255, 86, 0.35);
+  color: #405700;
+}
+
 .reveal-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -634,6 +666,11 @@ a {
 .answer-card.is-rejected {
   border-color: rgba(198, 49, 32, 0.25);
   background: rgba(255, 108, 82, 0.1);
+}
+
+.answer-card.needs-viewer-vote {
+  border: 2px solid #684bf5;
+  box-shadow: 0 0 0 3px rgba(104, 75, 245, 0.11);
 }
 
 .answer-card .avatar {
@@ -671,6 +708,20 @@ a {
 .own-vote {
   margin-top: 9px;
   font-size: 10px;
+}
+
+.vote-needed {
+  display: inline-flex;
+  margin-top: 9px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #684bf5;
+  color: #fff !important;
+  font-family: "DM Mono", monospace;
+  font-size: 9px !important;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .vote-actions {

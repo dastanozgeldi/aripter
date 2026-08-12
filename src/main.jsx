@@ -15,6 +15,7 @@ import {
   formatRoomCodeInput,
   isCompleteRoomCode,
 } from "./roomCode";
+import { getViewerVoteProgress } from "./voting";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -682,6 +683,46 @@ function RevealRound({
 }) {
   const isLastCategory =
     room.reveal.categoryIndex === room.categories.length - 1;
+  const answerCardRefs = useRef(new Map());
+  const previousVoteStateRef = useRef({
+    categoryIndex: room.reveal.categoryIndex,
+    remaining: null,
+  });
+  const voteProgress = getViewerVoteProgress(
+    room.reveal.answers,
+    room.viewer.id,
+  );
+  const firstPendingAnswer = room.reveal.answers.find(
+    (answer) =>
+      answer.playerId !== room.viewer.id &&
+      Boolean(answer.value.trim()) &&
+      answer.viewerVote === null,
+  );
+
+  useEffect(() => {
+    const previous = previousVoteStateRef.current;
+    const categoryChanged =
+      previous.categoryIndex !== room.reveal.categoryIndex;
+    const voteWasAdded =
+      !categoryChanged &&
+      previous.remaining !== null &&
+      voteProgress.remaining < previous.remaining;
+
+    previousVoteStateRef.current = {
+      categoryIndex: room.reveal.categoryIndex,
+      remaining: voteProgress.remaining,
+    };
+
+    if (!voteWasAdded || !firstPendingAnswer) return;
+
+    const nextCard = answerCardRefs.current.get(firstPendingAnswer.playerId);
+    nextCard?.scrollIntoView({ behavior: "smooth", block: "center" });
+    nextCard?.querySelector("button")?.focus({ preventScroll: true });
+  }, [
+    firstPendingAnswer,
+    room.reveal.categoryIndex,
+    voteProgress.remaining,
+  ]);
 
   return (
     <div className="reveal-content">
@@ -697,63 +738,102 @@ function RevealRound({
         Category {room.reveal.categoryIndex + 1} of {room.categories.length}
       </span>
       <h2>{room.reveal.category}</h2>
+      <div
+        aria-live="polite"
+        className={`personal-vote-progress ${
+          voteProgress.isComplete ? "is-complete" : ""
+        }`}
+      >
+        <strong>
+          {voteProgress.isComplete
+            ? "All your votes are in"
+            : `${voteProgress.remaining} vote${
+                voteProgress.remaining === 1 ? "" : "s"
+              } left`}
+        </strong>
+        <span>
+          {voteProgress.completed} of {voteProgress.total} complete
+        </span>
+      </div>
       <div className="reveal-grid">
-        {room.reveal.answers.map((answer, index) => (
-          <article
-            className={`answer-card ${
-              answer.approved
-                ? "is-approved"
-                : answer.votingComplete && answer.value.trim()
-                  ? "is-rejected"
-                  : ""
-            }`}
-            key={answer.playerId}
-            style={{ "--delay": `${index * 90}ms` }}
-          >
-            <div className="avatar">{answer.name.slice(0, 1).toUpperCase()}</div>
-            <span>{answer.name}</span>
-            <strong>{answer.value.trim() || "No answer"}</strong>
-            {answer.value.trim() ? (
-              <>
-                <em className="vote-summary">
-                  {answer.approved
-                    ? `Approved · +1`
-                    : answer.votingComplete
-                      ? "Rejected · 0"
-                      : `${answer.approvals} approval${
-                          answer.approvals === 1 ? "" : "s"
-                        } · ${answer.requiredApprovals} needed`}
-                </em>
-                {answer.playerId === room.viewer.id ? (
-                  <span className="own-vote">
-                    Your approval is automatic.
-                  </span>
-                ) : (
-                  <div className="vote-actions">
-                    <button
-                      aria-label={`Approve ${answer.name}'s answer`}
-                      className={answer.viewerVote === true ? "active approve" : ""}
-                      disabled={votingAnswerId === answer.playerId}
-                      onClick={() => onVote(answer.playerId, true)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      aria-label={`Reject ${answer.name}'s answer`}
-                      className={answer.viewerVote === false ? "active reject" : ""}
-                      disabled={votingAnswerId === answer.playerId}
-                      onClick={() => onVote(answer.playerId, false)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <em className="vote-summary">No vote needed · 0</em>
-            )}
-          </article>
-        ))}
+        {room.reveal.answers.map((answer, index) => {
+          const needsViewerVote =
+            answer.playerId !== room.viewer.id &&
+            Boolean(answer.value.trim()) &&
+            answer.viewerVote === null;
+
+          return (
+            <article
+              className={`answer-card ${
+                answer.approved
+                  ? "is-approved"
+                  : answer.votingComplete && answer.value.trim()
+                    ? "is-rejected"
+                    : ""
+              } ${needsViewerVote ? "needs-viewer-vote" : ""}`}
+              key={answer.playerId}
+              ref={(node) => {
+                if (node) answerCardRefs.current.set(answer.playerId, node);
+                else answerCardRefs.current.delete(answer.playerId);
+              }}
+              style={{ "--delay": `${index * 90}ms` }}
+            >
+              <div className="avatar">
+                {answer.name.slice(0, 1).toUpperCase()}
+              </div>
+              <span>{answer.name}</span>
+              <strong>{answer.value.trim() || "No answer"}</strong>
+              {answer.value.trim() ? (
+                <>
+                  <em className="vote-summary">
+                    {answer.approved
+                      ? `Approved · +1`
+                      : answer.votingComplete
+                        ? "Rejected · 0"
+                        : `${answer.approvals} approval${
+                            answer.approvals === 1 ? "" : "s"
+                          } · ${answer.requiredApprovals} needed`}
+                  </em>
+                  {answer.playerId === room.viewer.id ? (
+                    <span className="own-vote">
+                      Your approval is automatic.
+                    </span>
+                  ) : (
+                    <>
+                      {needsViewerVote && (
+                        <span className="vote-needed">Your vote needed</span>
+                      )}
+                      <div className="vote-actions">
+                        <button
+                          aria-label={`Approve ${answer.name}'s answer`}
+                          className={
+                            answer.viewerVote === true ? "active approve" : ""
+                          }
+                          disabled={votingAnswerId === answer.playerId}
+                          onClick={() => onVote(answer.playerId, true)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          aria-label={`Reject ${answer.name}'s answer`}
+                          className={
+                            answer.viewerVote === false ? "active reject" : ""
+                          }
+                          disabled={votingAnswerId === answer.playerId}
+                          onClick={() => onVote(answer.playerId, false)}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <em className="vote-summary">No vote needed · 0</em>
+              )}
+            </article>
+          );
+        })}
       </div>
       {room.viewer.isHost ? (
         <button
@@ -762,7 +842,9 @@ function RevealRound({
           onClick={onAdvance}
         >
           {!room.reveal.votingComplete
-            ? "Waiting for votes..."
+            ? voteProgress.isComplete
+              ? "Waiting for other players..."
+              : `${voteProgress.remaining} of your votes left`
             : advancing
             ? "Updating..."
             : isLastCategory
@@ -773,7 +855,11 @@ function RevealRound({
         <p className="microcopy">
           {room.reveal.votingComplete
             ? "Voting complete. Waiting for the host."
-            : "Vote on every other player’s non-empty answer."}
+            : voteProgress.isComplete
+              ? "All your votes are in. Waiting for the rest of the room."
+              : `You still have ${voteProgress.remaining} vote${
+                  voteProgress.remaining === 1 ? "" : "s"
+                } left.`}
         </p>
       )}
       {error && <p className="error-message">{error}</p>}
