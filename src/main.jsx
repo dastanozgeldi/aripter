@@ -11,6 +11,10 @@ import {
   getRandomCategoryCount,
   pickRandomCategories,
 } from "./categories";
+import {
+  formatRoomCodeInput,
+  isCompleteRoomCode,
+} from "./roomCode";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -964,14 +968,90 @@ function HowToPlay({ onClose }) {
   );
 }
 
+function JoinUsingCode({ onClose, onJoin }) {
+  const [code, setCode] = useState("");
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (isCompleteRoomCode(code)) onJoin(code);
+  };
+
+  return (
+    <div
+      className="join-code-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <section
+        aria-labelledby="join-code-title"
+        aria-modal="true"
+        className="join-code-panel"
+        role="dialog"
+      >
+        <div className="join-code-heading">
+          <div>
+            <span className="eyebrow">Have an invite code?</span>
+            <h2 id="join-code-title">Join a room</h2>
+          </div>
+          <button
+            aria-label="Close room code entry"
+            className="how-to-play-close"
+            onClick={onClose}
+            type="button"
+          >
+            ×
+          </button>
+        </div>
+
+        <form className="join-code-form" onSubmit={handleSubmit}>
+          <label htmlFor="room-code">Room code</label>
+          <input
+            aria-describedby="room-code-hint"
+            autoCapitalize="characters"
+            autoComplete="off"
+            autoFocus
+            id="room-code"
+            inputMode="text"
+            maxLength={6}
+            onChange={(event) => setCode(formatRoomCodeInput(event.target.value))}
+            placeholder="PGFSKK"
+            spellCheck="false"
+            value={code}
+          />
+          <p id="room-code-hint">Enter the six-letter code from the host.</p>
+          <button
+            className="primary-button"
+            disabled={!isCompleteRoomCode(code)}
+            type="submit"
+          >
+            Continue to room
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function GameShell({
   stageNumber,
   children,
   leaving = false,
+  onJoinUsingCode,
   onLeaveRoom,
   showIntro = false,
 }) {
   const [showHowToPlay, setShowHowToPlay] = useState(false);
+  const [showJoinUsingCode, setShowJoinUsingCode] = useState(false);
 
   return (
     <main className="game-app">
@@ -982,6 +1062,14 @@ function GameShell({
         </a>
         <div className="round-pill">One letter · Loads of words</div>
         <div className="header-actions">
+          {onJoinUsingCode && (
+            <button
+              className="header-link join-code-trigger"
+              onClick={() => setShowJoinUsingCode(true)}
+            >
+              Join using code
+            </button>
+          )}
           <button
             className="header-link how-to-play-trigger"
             onClick={() => setShowHowToPlay(true)}
@@ -1002,6 +1090,15 @@ function GameShell({
 
       {showHowToPlay && (
         <HowToPlay onClose={() => setShowHowToPlay(false)} />
+      )}
+      {showJoinUsingCode && (
+        <JoinUsingCode
+          onClose={() => setShowJoinUsingCode(false)}
+          onJoin={(code) => {
+            setShowJoinUsingCode(false);
+            onJoinUsingCode(code);
+          }}
+        />
       )}
 
       <div className="party-shell">
@@ -1240,7 +1337,11 @@ function RoomApp() {
 
   if (!roomCode) {
     return (
-      <GameShell showIntro stageNumber={1}>
+      <GameShell
+        onJoinUsingCode={navigateToRoom}
+        showIntro
+        stageNumber={1}
+      >
         <SetupForm onCreate={handleCreate} />
       </GameShell>
     );
