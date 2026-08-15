@@ -16,6 +16,7 @@ import {
   isCompleteRoomCode,
 } from "./roomCode";
 import { getViewerVoteProgress } from "./voting";
+import posthog, { isPosthogConfigured } from "./posthog";
 import "./styles.css";
 
 const convexUrl = import.meta.env.VITE_CONVEX_URL;
@@ -1232,6 +1233,10 @@ function GameShell({
 function RoomApp() {
   const playerToken = useMemo(getPlayerToken, []);
   const [roomCode, navigateToRoom] = useRoomNavigation();
+
+  useEffect(() => {
+    if (isPosthogConfigured) posthog.identify(playerToken);
+  }, [playerToken]);
   const [copied, setCopied] = useState(false);
   const [startError, setStartError] = useState("");
   const [starting, setStarting] = useState(false);
@@ -1311,6 +1316,11 @@ function RoomApp() {
       ...settings,
       hostToken: playerToken,
     });
+    posthog.capture("room_created", {
+      category_count: settings.categories.length,
+      duration_seconds: settings.durationSeconds,
+      language: settings.language,
+    });
     navigateToRoom(result.code);
   };
 
@@ -1320,10 +1330,12 @@ function RoomApp() {
       playerToken,
       playerName,
     });
+    posthog.capture("room_joined");
   };
 
   const handleCopyLink = async () => {
     await navigator.clipboard.writeText(window.location.href);
+    posthog.capture("invite_link_copied");
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
   };
@@ -1332,7 +1344,10 @@ function RoomApp() {
     setStarting(true);
     setStartError("");
     try {
-      await startRound({ code: roomCode, hostToken: playerToken });
+      const result = await startRound({ code: roomCode, hostToken: playerToken });
+      posthog.capture("round_started", {
+        round_number: result.roundNumber,
+      });
     } catch (error) {
       setStartError(getErrorMessage(error));
       setStarting(false);
@@ -1344,6 +1359,11 @@ function RoomApp() {
     setRevealError("");
     try {
       await advanceReveal({ code: roomCode, hostToken: playerToken });
+      posthog.capture("reveal_advanced", {
+        category_index: room.reveal.categoryIndex,
+        is_final_category:
+          room.reveal.categoryIndex === room.categories.length - 1,
+      });
     } catch (error) {
       setRevealError(getErrorMessage(error));
       setAdvancingReveal(false);
@@ -1355,6 +1375,7 @@ function RoomApp() {
     setSkipError("");
     try {
       await initiateSkipVote({ code: roomCode, hostToken: playerToken });
+      posthog.capture("skip_vote_initiated");
     } catch (error) {
       setSkipError(getErrorMessage(error));
       setInitiatingSkip(false);
@@ -1366,6 +1387,7 @@ function RoomApp() {
     setSkipError("");
     try {
       await voteToSkip({ code: roomCode, playerToken, skip });
+      posthog.capture("skip_vote_cast", { skip });
     } catch (error) {
       setSkipError(getErrorMessage(error));
       setVotingToSkip(false);
@@ -1377,6 +1399,9 @@ function RoomApp() {
     setFinishError("");
     try {
       await startFinalCountdown({ code: roomCode, playerToken });
+      posthog.capture("final_countdown_started", {
+        round_number: room.roundNumber,
+      });
     } catch (error) {
       setFinishError(getErrorMessage(error));
       setFinishing(false);
@@ -1393,6 +1418,10 @@ function RoomApp() {
         answerPlayerId,
         approved,
       });
+      posthog.capture("answer_vote_cast", {
+        approved,
+        category_index: room.reveal.categoryIndex,
+      });
     } catch (error) {
       setRevealError(getErrorMessage(error));
     } finally {
@@ -1405,6 +1434,9 @@ function RoomApp() {
     setReturnError("");
     try {
       await returnToLobby({ code: roomCode, hostToken: playerToken });
+      posthog.capture("returned_to_lobby", {
+        round_number: room.roundNumber,
+      });
     } catch (error) {
       setReturnError(getErrorMessage(error));
       setReturning(false);
@@ -1415,6 +1447,7 @@ function RoomApp() {
     setLeaving(true);
     try {
       await leaveRoom({ code: roomCode, playerToken });
+      posthog.capture("room_left");
       navigateToRoom("");
     } catch {
       setLeaving(false);
@@ -1545,9 +1578,10 @@ function RoomApp() {
         copied={copied}
         onCopyLink={handleCopyLink}
         onStartRound={handleStartRound}
-        onSetReady={(ready) =>
-          setReady({ code: room.code, playerToken, ready })
-        }
+        onSetReady={async (ready) => {
+          await setReady({ code: room.code, playerToken, ready });
+          posthog.capture("player_ready_state_changed", { ready });
+        }}
         room={room}
         startError={startError}
         starting={starting}
